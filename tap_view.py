@@ -38,23 +38,30 @@ class TapMonitor:
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
         self.thread.start()
 
-    def stop(self, timeout=2.0):
+    def stop(self, timeout=5.0):
         self.stop_event.set()
         if self.thread is not None:
+            # Restoring typing mode is a Bluetooth write; the caller kills the process right after.
             self.thread.join(timeout)
 
     async def _run(self):
         stream = (DemoStream if self.demo else TapRawStream)(SensorConfig(), address=self.address)
         stream.on_sample(self.on_sample)
         try:
-            async with stream:
-                with self.lock:
-                    self.status = "Tap: demo data" if self.demo else "Tap: connected"
-                while not self.stop_event.is_set():
-                    await asyncio.sleep(0.1)
+            await stream.start()
+            with self.lock:
+                self.status = "Tap: demo data" if self.demo else "Tap: connected"
+            while not self.stop_event.is_set():
+                await asyncio.sleep(0.1)
         except Exception as error:
             with self.lock:
                 self.status = f"Tap: not connected - {error}"[:70]
+        finally:
+            try:
+                # Also after a half-finished connect, so the link isn't left open.
+                await stream.stop()
+            except Exception:
+                pass  # DemoStream.stop fails if start never ran; nothing to clean up.
 
     def on_sample(self, sample, _host_time=None):
         with self.lock:

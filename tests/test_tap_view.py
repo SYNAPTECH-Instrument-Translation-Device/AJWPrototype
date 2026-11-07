@@ -43,6 +43,16 @@ class TapViewTests(unittest.TestCase):
         tap.on_sample(sample)
         self.assertEqual(tap.display_status(time.monotonic()), tap.status)
 
+    def test_demo_thread_starts_and_stops(self):
+        t = TapMonitor(demo=True)
+        t.start()
+        deadline = time.monotonic() + 2
+        while t.last_sample is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertIsNotNone(t.last_sample)
+        t.stop()
+        self.assertFalse(t.thread.is_alive())
+
 
 if __name__ == "__main__":
     unittest.main()
