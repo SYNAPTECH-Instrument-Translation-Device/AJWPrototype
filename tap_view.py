@@ -17,6 +17,7 @@ from tapstrap import FINGERS, DemoStream, FingerAccelSample, SensorConfig, TapRa
 FULL_SCALE_G = 2.0   # |accel - 1 g| that fills a bar.
 TAP_G = 0.5          # Bars turn red above this, so taps stand out.
 HALF_LIFE_S = 0.1    # Peak-hold decay of the bars.
+STALE_S = 1.0        # No finger data for this long means the strap went quiet.
 WIDTH, HEIGHT = 480, 300
 
 
@@ -30,6 +31,7 @@ class TapMonitor:
         self.activity = {f: 0.0 for f in FINGERS}
         self.gyro = (0.0, 0.0, 0.0)
         self.count, self.rate = 0, 0.0
+        self.last_sample = None  # Monotonic time of the newest finger sample.
         self.last_rate_time = self.last_render = time.monotonic()
 
     def start(self):
@@ -58,12 +60,19 @@ class TapMonitor:
         with self.lock:
             if isinstance(sample, FingerAccelSample):
                 self.count += 1
+                self.last_sample = time.monotonic()
                 for f, m in zip(FINGERS, sample.magnitudes()):
                     self.activity[f] = max(self.activity[f], abs(m - 1.0))
             else:
                 self.gyro = sample.gyro_dps
 
-    def render(self, finger_regions=None):
+    def display_status(self, now):
+        # Call with self.lock held (or single-threaded). Never overwrites self.status.
+        if self.last_sample is not None and now - self.last_sample > STALE_S:
+            return "Tap: no data - strap asleep or out of range?"
+        return self.status
+
+    def render(self,finger_regions=None):
         # Camera names are capitalised (calibration.FINGERTIPS); strap names are not.
         finger_regions = {k.lower(): v for k, v in (finger_regions or {}).items()}
         img = np.full((HEIGHT, WIDTH, 3), 30, np.uint8)
@@ -78,7 +87,7 @@ class TapMonitor:
             self.last_render = now
             for f in FINGERS:
                 self.activity[f] *= decay
-            status, rate, gyro = self.status, self.rate, self.gyro
+            status, rate, gyro = self.display_status(now), self.rate, self.gyro
 
         cv2.putText(img, status, (10, 22), font, 0.5, (0, 255, 255), 1)
         cv2.putText(img, f"fingers {rate:.0f} Hz", (10, 44), font, 0.45, white, 1)

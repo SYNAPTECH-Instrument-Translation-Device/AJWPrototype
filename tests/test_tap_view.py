@@ -1,4 +1,5 @@
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -31,6 +32,16 @@ class TapViewTests(unittest.TestCase):
         with_key = TapMonitor(demo=True).render({"Index": 3})
         without = TapMonitor(demo=True).render({})
         self.assertFalse(np.array_equal(with_key, without))
+
+    def test_status_goes_stale(self):
+        tap = TapMonitor(demo=True)
+        sample = FingerAccelSample(0, REST, REST, REST, REST, REST)
+        tap.on_sample(sample)
+        tap.last_sample -= 2
+        self.assertTrue(tap.display_status(time.monotonic()).startswith("Tap: no data"))
+        self.assertEqual(tap.render().shape, (HEIGHT, WIDTH, 3))
+        tap.on_sample(sample)
+        self.assertEqual(tap.display_status(time.monotonic()), tap.status)
 
 
 if __name__ == "__main__":
