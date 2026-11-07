@@ -1,6 +1,8 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -24,6 +26,15 @@ def jpeg_bytes():
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.client = phone_server.app.test_client()
+        # Never read or write the developer's real calibration/ folder.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.cal_dir = Path(tmp.name)
+        patcher = mock.patch.object(phone_server, "CALIBRATION_DIR", self.cal_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        phone_server.calibration = None
+        phone_server.calibration_checked = False
 
     def test_detect_paper_does_not_mutate_input(self):
         img = make_image()
