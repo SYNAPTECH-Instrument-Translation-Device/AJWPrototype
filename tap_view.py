@@ -17,6 +17,7 @@ from tapstrap import FINGERS, DemoStream, FingerAccelSample, SensorConfig, TapRa
 FULL_SCALE_G = 2.0   # |accel - 1 g| that fills a bar.
 TAP_G = 0.5          # Bars turn red above this, so taps stand out.
 HALF_LIFE_S = 0.1    # Peak-hold decay of the bars.
+STALE_S = 1.0        # No finger data for this long means the strap went quiet.
 WIDTH, HEIGHT = 480, 300
 
 
@@ -30,41 +31,57 @@ class TapMonitor:
         self.activity = {f: 0.0 for f in FINGERS}
         self.gyro = (0.0, 0.0, 0.0)
         self.count, self.rate = 0, 0.0
+        self.last_sample = None  # Monotonic time of the newest finger sample.
         self.last_rate_time = self.last_render = time.monotonic()
 
     def start(self):
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
         self.thread.start()
 
-    def stop(self, timeout=2.0):
+    def stop(self, timeout=5.0):
         self.stop_event.set()
         if self.thread is not None:
+            # Restoring typing mode is a Bluetooth write; the caller kills the process right after.
             self.thread.join(timeout)
 
     async def _run(self):
         stream = (DemoStream if self.demo else TapRawStream)(SensorConfig(), address=self.address)
         stream.on_sample(self.on_sample)
         try:
-            async with stream:
-                with self.lock:
-                    self.status = "Tap: demo data" if self.demo else "Tap: connected"
-                while not self.stop_event.is_set():
-                    await asyncio.sleep(0.1)
+            await stream.start()
+            with self.lock:
+                self.status = "Tap: demo data" if self.demo else "Tap: connected"
+            while not self.stop_event.is_set():
+                await asyncio.sleep(0.1)
         except Exception as error:
             with self.lock:
                 self.status = f"Tap: not connected - {error}"[:70]
+        finally:
+            try:
+                # Also after a half-finished connect, so the link isn't left open.
+                await stream.stop()
+            except Exception:
+                pass  # DemoStream.stop fails if start never ran; nothing to clean up.
 
     def on_sample(self, sample, _host_time=None):
         with self.lock:
             if isinstance(sample, FingerAccelSample):
                 self.count += 1
+                self.last_sample = time.monotonic()
                 for f, m in zip(FINGERS, sample.magnitudes()):
                     self.activity[f] = max(self.activity[f], abs(m - 1.0))
             else:
                 self.gyro = sample.gyro_dps
 
-    def render(self, finger_regions=None):
-        finger_regions = finger_regions or {}
+    def display_status(self, now):
+        # Call with self.lock held (or single-threaded). Never overwrites self.status.
+        if self.last_sample is not None and now - self.last_sample > STALE_S:
+            return "Tap: no data - strap asleep or out of range?"
+        return self.status
+
+    def render(self,finger_regions=None):
+        # Camera names are capitalised (calibration.FINGERTIPS); strap names are not.
+        finger_regions = {k.lower(): v for k, v in (finger_regions or {}).items()}
         img = np.full((HEIGHT, WIDTH, 3), 30, np.uint8)
         font, white = cv2.FONT_HERSHEY_SIMPLEX, (230, 230, 230)
         now = time.monotonic()
@@ -77,7 +94,7 @@ class TapMonitor:
             self.last_render = now
             for f in FINGERS:
                 self.activity[f] *= decay
-            status, rate, gyro = self.status, self.rate, self.gyro
+            status, rate, gyro = self.display_status(now), self.rate, self.gyro
 
         cv2.putText(img, status, (10, 22), font, 0.5, (0, 255, 255), 1)
         cv2.putText(img, f"fingers {rate:.0f} Hz", (10, 44), font, 0.45, white, 1)

@@ -1,6 +1,9 @@
 import sys
+import time
 import unittest
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -24,6 +27,31 @@ class TapViewTests(unittest.TestCase):
         img = tap.render({"index": 3, "thumb": None})
         self.assertEqual(img.shape, (HEIGHT, WIDTH, 3))
         self.assertLess(tap.activity["index"], 1.5)
+
+    def test_render_accepts_camera_finger_names(self):
+        with_key = TapMonitor(demo=True).render({"Index": 3})
+        without = TapMonitor(demo=True).render({})
+        self.assertFalse(np.array_equal(with_key, without))
+
+    def test_status_goes_stale(self):
+        tap = TapMonitor(demo=True)
+        sample = FingerAccelSample(0, REST, REST, REST, REST, REST)
+        tap.on_sample(sample)
+        tap.last_sample -= 2
+        self.assertTrue(tap.display_status(time.monotonic()).startswith("Tap: no data"))
+        self.assertEqual(tap.render().shape, (HEIGHT, WIDTH, 3))
+        tap.on_sample(sample)
+        self.assertEqual(tap.display_status(time.monotonic()), tap.status)
+
+    def test_demo_thread_starts_and_stops(self):
+        t = TapMonitor(demo=True)
+        t.start()
+        deadline = time.monotonic() + 2
+        while t.last_sample is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertIsNotNone(t.last_sample)
+        t.stop()
+        self.assertFalse(t.thread.is_alive())
 
 
 if __name__ == "__main__":
