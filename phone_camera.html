@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Instrument Translation Camera</title>
+
+    <link rel="stylesheet" href="/phone_camera.css">
+    <script src="/phone_camera.js" defer></script>
+</head>
+
+<body>
+    <h1>Instrument Translation</h1>
+
+    <video
+        id="video"
+        autoplay
+        playsinline
+        muted
+    ></video>
+
+    <p id="status">Camera stopped.</p>
+    <p id="resolution">Resolution: not started</p>
+
+    <div id="fps-container">
+        <span id="fps-label">Sending FPS: 0.0</span>
+        <div id="fps-track">
+            <div id="fps-bar"></div>
+        </div>
+    </div>
+
+    <button id="start">Start Camera</button>
+    <button id="stop" disabled>Stop Camera</button>
+</body>
+</html>
