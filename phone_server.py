@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import threading
 import time
 import traceback
@@ -157,19 +158,34 @@ def submit_frame(frame):
 
 
 def open_camera(index):
-    # DirectShow is the Windows backend that lists virtual webcams like Camo.
+    # DirectShow is the Windows backend that lists virtual webcams like Camo;
+    # AVFoundation is the macOS one (built-in camera, Continuity Camera, Camo).
     # Use the camera's own resolution: asking Camo for 640x480 makes it send
     # all-black frames.
-    return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    if sys.platform == "win32":
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    if sys.platform == "darwin":
+        return cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
+    return cv2.VideoCapture(index)
 
 
 def list_cameras(max_index=6):
     for index in range(max_index):
         cap = open_camera(index)
-        ok, frame = cap.read() if cap.isOpened() else (False, None)
+        opened = cap.isOpened()
+        ok, frame = False, None
+        if opened:
+            # Continuity Camera (iPhone) can take a second to send its first frame.
+            for _ in range(30):
+                ok, frame = cap.read()
+                if ok:
+                    break
+                time.sleep(0.1)
         cap.release()
         if ok:
             print(f"  camera {index}: {frame.shape[1]}x{frame.shape[0]}")
+        elif opened:
+            print(f"  camera {index}: opened but sent no frames")
 
 
 def camera_loop(index):
@@ -319,13 +335,23 @@ def settings_help_image():
     return image
 
 
-def run_server():
+def run_server(use_https=False):
+    # Phones only allow camera access over HTTPS. --https serves it directly
+    # with a local self-signed certificate; otherwise put ngrok in front.
+    ssl_context = None
+    if use_https:
+        cert, key = BASE_DIR / "cert.pem", BASE_DIR / "key.pem"
+        if not (cert.exists() and key.exists()):
+            print("cert.pem/key.pem not found; see 'Local HTTPS' in the README.")
+            os._exit(1)
+        ssl_context = (str(cert), str(key))
     app.run(
         host="0.0.0.0",
         port=5000,
         debug=False,
         use_reloader=False,
         threaded=True,
+        ssl_context=ssl_context,
     )
 
 
@@ -338,6 +364,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--list-cameras", action="store_true", help="print working camera indices and exit",
     )
+    parser.add_argument(
+        "--https", action="store_true",
+        help="serve the phone page over HTTPS with cert.pem/key.pem (no ngrok needed)",
+    )
     parser.add_argument("--tap", action="store_true", help="also stream a Tap Strap into a 'Tap Strap' window")
     parser.add_argument("--tap-demo", action="store_true", help="like --tap, but with synthetic data (no strap)")
     parser.add_argument("--tap-address", metavar="ADDR", help="Tap Strap BLE address (default: first found)")
@@ -347,7 +377,7 @@ if __name__ == "__main__":
         raise SystemExit
 
     if args.camera is None:
-        threading.Thread(target=run_server, daemon=True).start()
+        threading.Thread(target=run_server, args=(args.https,), daemon=True).start()
         source = "phone camera frames"
     else:
         threading.Thread(target=camera_loop, args=(args.camera,), daemon=True).start()

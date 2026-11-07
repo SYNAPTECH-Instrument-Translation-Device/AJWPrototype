@@ -6,4 +6,5 @@ __pycache__/
 calibration/
 .claude/
 recordings/
+# Local HTTPS certificate (private key must never be committed)
 *.pem
