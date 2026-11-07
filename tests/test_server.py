@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 
 import phone_server
+from calibration import build_calibration, save_calibration
+from tests.test_calibration import STRAIGHT, make_sheet, solid
 from paper_detector import detect_paper
 
 
@@ -77,6 +79,35 @@ class ServerTests(unittest.TestCase):
         # The --camera path uses submit_frame directly, without HTTP.
         phone_server.submit_frame(make_image())
         self.assertTrue(phone_server.process_pending())
+
+    def save_sheet_calibration(self):
+        img = make_sheet(solid, STRAIGHT)[0]
+        save_calibration(build_calibration([img]), self.cal_dir)
+        return img
+
+    def feed(self, frame):
+        phone_server.submit_frame(frame)
+        self.assertTrue(phone_server.process_pending())
+
+    def test_no_saved_calibration_in_temp_dir(self):
+        self.feed(make_image())
+        self.assertIsNone(phone_server.calibration)
+
+    def test_saved_calibration_loads(self):
+        img = self.save_sheet_calibration()
+        self.feed(img)
+        self.assertIsNotNone(phone_server.calibration)
+        self.assertEqual(len(phone_server.calibration["regions"]), 4)
+
+    def test_rotating_back_reloads_calibration(self):
+        img = self.save_sheet_calibration()
+        self.feed(img)
+        self.assertIsNotNone(phone_server.calibration)
+        self.feed(np.ascontiguousarray(np.rot90(img)))
+        self.assertIsNone(phone_server.calibration)
+        self.feed(img)
+        self.assertIsNotNone(phone_server.calibration)
+        self.assertEqual(len(phone_server.calibration["regions"]), 4)
 
     def test_frame_counter(self):
         before = phone_server.frames_received
