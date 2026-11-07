@@ -247,6 +247,7 @@ def process_frame(frame):
                     calibration_frames = []
         if calibration is not None and calibration["frame_size"] != frame_size:
             calibration = None
+            checked_size = frame_size
             status_text = "Frame size changed (phone rotated?): press C to recalibrate."
         cal = calibration if not calibrating else None
 
