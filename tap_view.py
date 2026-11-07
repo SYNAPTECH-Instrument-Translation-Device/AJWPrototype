@@ -6,6 +6,7 @@
     tap.stop()
 """
 import asyncio
+import collections
 import threading
 import time
 
@@ -18,6 +19,7 @@ FULL_SCALE_G = 2.0   # |accel - 1 g| that fills a bar.
 TAP_G = 0.5          # Bars turn red above this, so taps stand out.
 HALF_LIFE_S = 0.1    # Peak-hold decay of the bars.
 STALE_S = 1.0        # No finger data for this long means the strap went quiet.
+REFRACTORY_S = 0.15  # One tap per finger per this long (bounces and ringing).
 WIDTH, HEIGHT = 480, 300
 
 
@@ -33,6 +35,9 @@ class TapMonitor:
         self.count, self.rate = 0, 0.0
         self.last_sample = None  # Monotonic time of the newest finger sample.
         self.last_rate_time = self.last_render = time.monotonic()
+        self.above = {f: False for f in FINGERS}   # Was the last sample over TAP_G?
+        self.last_tap = {f: -1e9 for f in FINGERS}
+        self.events = collections.deque(maxlen=64)  # (host_time_s, finger, peak_g)
 
     def start(self):
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
@@ -63,15 +68,29 @@ class TapMonitor:
             except Exception:
                 pass  # DemoStream.stop fails if start never ran; nothing to clean up.
 
-    def on_sample(self, sample, _host_time=None):
+    def on_sample(self, sample, host_time=None):
+        host_time = host_time if host_time is not None else time.time()
         with self.lock:
             if isinstance(sample, FingerAccelSample):
                 self.count += 1
                 self.last_sample = time.monotonic()
                 for f, m in zip(FINGERS, sample.magnitudes()):
-                    self.activity[f] = max(self.activity[f], abs(m - 1.0))
+                    dev = abs(m - 1.0)
+                    self.activity[f] = max(self.activity[f], dev)
+                    if dev > TAP_G and not self.above[f] and host_time - self.last_tap[f] >= REFRACTORY_S:
+                        # shortcut: peak is the deviation at the crossing sample, not the true peak; fine for v1 loudness.
+                        self.events.append((host_time, f, dev))
+                        self.last_tap[f] = host_time
+                    self.above[f] = dev > TAP_G
             else:
                 self.gyro = sample.gyro_dps
+
+    def pop_events(self):
+        """Taps since the last call, oldest first: [(host_time_s, finger, peak_g)]."""
+        with self.lock:
+            events = list(self.events)
+            self.events.clear()
+        return events
 
     def display_status(self, now):
         # Call with self.lock held (or single-threaded). Never overwrites self.status.

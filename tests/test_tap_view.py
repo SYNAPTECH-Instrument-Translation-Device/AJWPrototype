@@ -13,6 +13,10 @@ from tapstrap import FingerAccelSample
 REST = (0.0, 0.0, -1.0)
 
 
+def sample(index_z):
+    return FingerAccelSample(0, REST, (0.0, 0.0, index_z), REST, REST, REST)
+
+
 class TapViewTests(unittest.TestCase):
     def test_spike_raises_only_that_finger(self):
         tap = TapMonitor(demo=True)
@@ -52,6 +56,33 @@ class TapViewTests(unittest.TestCase):
         self.assertIsNotNone(t.last_sample)
         t.stop()
         self.assertFalse(t.thread.is_alive())
+
+    def test_one_event_per_tap(self):
+        tap = TapMonitor(demo=True)
+        for z, t in [(-1.0, 0.0), (-2.5, 0.005), (-2.5, 0.010), (-1.0, 0.015)]:
+            tap.on_sample(sample(z), t)
+        events = tap.pop_events()
+        self.assertEqual(len(events), 1)
+        t, finger, peak = events[0]
+        self.assertAlmostEqual(t, 0.005)
+        self.assertEqual(finger, "index")
+        self.assertAlmostEqual(peak, 1.5)
+        self.assertEqual(tap.pop_events(), [])
+
+    def test_refractory(self):
+        tap = TapMonitor(demo=True)
+        for z, t in [(-2.5, 0.0), (-1.0, 0.01), (-2.5, 0.05)]:
+            tap.on_sample(sample(z), t)
+        self.assertEqual(len(tap.events), 1)
+        tap.on_sample(sample(-1.0), 0.06)
+        tap.on_sample(sample(-2.5), 0.30)
+        self.assertEqual(len(tap.pop_events()), 2)
+
+    def test_rest_noise_no_event(self):
+        tap = TapMonitor(demo=True)
+        for i in range(100):
+            tap.on_sample(sample(-1.2), i * 0.005)
+        self.assertEqual(tap.pop_events(), [])
 
 
 if __name__ == "__main__":
