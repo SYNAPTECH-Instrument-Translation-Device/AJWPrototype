@@ -177,6 +177,8 @@ A **Tap Strap** window opens next to the camera feed. Each finger has a live acc
 
 `--tap-hand left|right` (default `right`) says which hand wears the strap, so the key column follows that hand. Keys under both hands are highlighted. If the column follows your other hand, switch the value: hand labels assume an unmirrored camera image, which hasn't been checked with every camera yet.
 
+Each strap tap is logged to `recordings/taps_<time>.csv` (time, finger, the key the camera saw that finger on, peak g). On quit the app prints how many taps landed on a key.
+
 ## Tests
 
 Run the unit tests from the repo root:

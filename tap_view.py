@@ -7,8 +7,10 @@
 """
 import asyncio
 import collections
+import csv
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -21,6 +23,30 @@ HALF_LIFE_S = 0.1    # Peak-hold decay of the bars.
 STALE_S = 1.0        # No finger data for this long means the strap went quiet.
 REFRACTORY_S = 0.15  # One tap per finger per this long (bounces and ringing).
 WIDTH, HEIGHT = 480, 300
+
+
+class TapLog:
+    """Appends tap-to-key events to a CSV and counts how many landed on a key."""
+
+    def __init__(self, path):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.file = open(path, "w", newline="")
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(["host_time_s", "finger", "key", "peak_g"])
+        self.taps = self.on_key = 0
+
+    def add(self, host_time, finger, key, peak):
+        self.writer.writerow([f"{host_time:.4f}", finger, key or 0, f"{peak:.3f}"])
+        self.file.flush()  # The app exits by killing the process; don't lose rows.
+        self.taps += 1
+        self.on_key += bool(key)
+
+    def summary(self):
+        pct = 100 * self.on_key / self.taps if self.taps else 0
+        return f"Taps: {self.taps}, on a key: {self.on_key} ({pct:.0f}%)"
+
+    def close(self):
+        self.file.close()
 
 
 class TapMonitor:

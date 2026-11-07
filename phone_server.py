@@ -25,7 +25,7 @@ from calibration import (
     save_calibration,
 )
 from paper_detector import detect_paper
-from tap_view import TapMonitor
+from tap_view import TapLog, TapMonitor
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -400,11 +400,13 @@ if __name__ == "__main__":
         source = f"camera {args.camera}"
     threading.Thread(target=process_loop, daemon=True).start()
     tap = None
+    tap_log = None
     if args.tap or args.tap_demo:
         # MediaPipe labels hands as if the image were mirrored; ours aren't, so swap.
         strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
         tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
         tap.start()
+        tap_log = TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
 
     print(f"Waiting for {source}. C = calibrate, S = save frame, Q = quit.")
 
@@ -492,6 +494,10 @@ if __name__ == "__main__":
             cv2.imshow("Phone Camera Feed", frame)
             if tap is not None:
                 cv2.imshow("Tap Strap", tap.render(fingers))
+                for host_time, finger, peak in tap.pop_events():
+                    # Strap names are lowercase; camera names are capitalised.
+                    key = fingers.get(finger.capitalize())
+                    tap_log.add(host_time, finger, key, peak)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -517,6 +523,9 @@ if __name__ == "__main__":
         # Don't call hand_landmarker.close(): it can block forever while the
         # worker thread is mid-detection, which froze the terminal on Ctrl+C.
         # Exiting the process frees the model, camera and windows anyway.
+        if tap_log is not None:
+            print(tap_log.summary())
+            tap_log.close()
         if tap is not None:
             tap.stop()  # Puts the strap back in normal typing mode.
         cv2.destroyAllWindows()

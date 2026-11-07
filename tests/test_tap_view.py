@@ -1,4 +1,6 @@
+import csv
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -7,7 +9,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tap_view import HEIGHT, WIDTH, TapMonitor
+from tap_view import HEIGHT, WIDTH, TapLog, TapMonitor
 from tapstrap import FingerAccelSample
 
 REST = (0.0, 0.0, -1.0)
@@ -83,6 +85,20 @@ class TapViewTests(unittest.TestCase):
         for i in range(100):
             tap.on_sample(sample(-1.2), i * 0.005)
         self.assertEqual(tap.pop_events(), [])
+
+    def test_tap_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sub" / "taps.csv"
+            log = TapLog(path)
+            log.add(1.0, "index", 3, 1.2)
+            log.add(2.0, "ring", None, 0.8)
+            log.close()
+            with open(path, newline="") as f:
+                rows = list(csv.reader(f))
+        self.assertEqual(rows[0], ["host_time_s", "finger", "key", "peak_g"])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([r[2] for r in rows[1:]], ["3", "0"])
+        self.assertEqual(log.summary(), "Taps: 2, on a key: 1 (50%)")
 
 
 if __name__ == "__main__":
