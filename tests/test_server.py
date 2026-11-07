@@ -34,7 +34,7 @@ class ServerTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         phone_server.calibration = None
-        phone_server.calibration_checked = False
+        phone_server.checked_size = None
 
     def test_detect_paper_does_not_mutate_input(self):
         img = make_image()
