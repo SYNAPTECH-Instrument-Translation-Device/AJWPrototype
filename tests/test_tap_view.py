@@ -2,6 +2,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tap_view import HEIGHT, WIDTH, TapMonitor
@@ -24,6 +26,11 @@ class TapViewTests(unittest.TestCase):
         img = tap.render({"index": 3, "thumb": None})
         self.assertEqual(img.shape, (HEIGHT, WIDTH, 3))
         self.assertLess(tap.activity["index"], 1.5)
+
+    def test_render_accepts_camera_finger_names(self):
+        with_key = TapMonitor(demo=True).render({"Index": 3})
+        without = TapMonitor(demo=True).render({})
+        self.assertFalse(np.array_equal(with_key, without))
 
 
 if __name__ == "__main__":

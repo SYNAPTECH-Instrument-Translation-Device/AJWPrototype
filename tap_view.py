@@ -64,7 +64,8 @@ class TapMonitor:
                 self.gyro = sample.gyro_dps
 
     def render(self, finger_regions=None):
-        finger_regions = finger_regions or {}
+        # Camera names are capitalised (calibration.FINGERTIPS); strap names are not.
+        finger_regions = {k.lower(): v for k, v in (finger_regions or {}).items()}
         img = np.full((HEIGHT, WIDTH, 3), 30, np.uint8)
         font, white = cv2.FONT_HERSHEY_SIMPLEX, (230, 230, 230)
         now = time.monotonic()
