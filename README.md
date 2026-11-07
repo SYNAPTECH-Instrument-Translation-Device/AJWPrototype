@@ -111,12 +111,21 @@ The certificate expires after 365 days; rerun step 1 to make a new one.
 
 ## Project Structure
 
-- `phone_server.py` — Flask server, frame processing, and hand tracking.
-- `phone_camera.html` — Phone camera interface.
-- `phone_camera.css` — Interface styling.
-- `phone_camera.js` — Camera capture and frame transmission.
-- `paper_detector.py` — Paper detection.
+- `phone_server.py` — Main app: phone-page server or `--camera` webcam input, hand tracking, calibration, key overlay and sliders.
+- `phone_camera.html`, `phone_camera.css`, `phone_camera.js` — Phone camera page that sends frames to the server.
+- `calibration.py` — Finds the paper, flattens it, detects and numbers the keys, and saves/loads `calibration/`.
+- `calibrate_image.py` — Writes a `_debug.png` for one saved frame (see Calibration).
+- `paper_detector.py` — White-paper mask used by calibration and the live overlay.
+- `debug.py` — Old standalone viewer: paper-detection mask from webcam 0. Not used by the app.
+- `tapstrap/` — Tap Strap 2 raw-sensor decoding (`decode.py`) and Bluetooth streaming (`stream.py`).
+- `tap_view.py` — Tap Strap window shown by `phone_server.py --tap` / `--tap-demo`.
+- `tap_strap_live.py`, `hello_tap.py` — Standalone strap scripts from the old demo repo (console readout, tap codes). Not used by the app.
+- `stream_raw.py`, `live_plot.py` — Live Tap Strap readout and plot (`--demo` works without a strap).
+- `m0_record.py`, `m0_analyze.py` — Milestone 0 recording sessions and reports (see Tap Strap (M0)).
 - `models/hand_landmarker.task` — MediaPipe hand-tracking model.
+- `tests/` — Unit tests; `tests/fixtures/` holds real camera frames used as regression tests.
+- `plans/` — Implementation plans and their status.
+- `METRICS.md` — Measured and synthetic results over time.
 - `requirements.txt` — Python dependencies.
 
 ## Using the iPhone over USB (no ngrok)

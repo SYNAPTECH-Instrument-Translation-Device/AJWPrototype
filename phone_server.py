@@ -45,7 +45,7 @@ SAMPLES_DIR = BASE_DIR / "samples"
 CALIBRATION_FRAMES = 15
 
 calibration = None
-calibration_checked = False
+checked_size = None        # Frame size the saved calibration was last tried for.
 calibrating = False
 calibration_frames = []
 latest_raw = None
@@ -209,7 +209,7 @@ def camera_loop(index):
 
 def process_frame(frame):
     global latest_frame, last_timestamp_ms
-    global calibration, calibration_checked, calibrating, calibration_frames
+    global calibration, checked_size, calibrating, calibration_frames
     global latest_raw, latest_fingers, status_text
     global ink_ratio_setting, line_kernel_setting
 
@@ -229,11 +229,13 @@ def process_frame(frame):
         last_timestamp_ms = timestamp_ms
         result = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
 
+    frame_size = (frame.shape[1], frame.shape[0])
     with frame_lock:
         latest_raw = frame
-        if not calibration_checked:
+        # Try the saved calibration once per frame size, so rotating back reloads it.
+        if calibration is None and checked_size != frame_size:
+            checked_size = frame_size
             calibration = load_calibration(CALIBRATION_DIR, frame.shape)
-            calibration_checked = True
             if calibration is not None:
                 ink_ratio_setting = calibration["settings"]["ink_ratio"]
                 line_kernel_setting = calibration["settings"]["line_kernel"]
@@ -259,9 +261,9 @@ def process_frame(frame):
                 finally:
                     calibrating = False
                     calibration_frames = []
-        frame_size = (frame.shape[1], frame.shape[0])
         if calibration is not None and calibration["frame_size"] != frame_size:
             calibration = None
+            checked_size = frame_size
             status_text = "Frame size changed (phone rotated?): press C to recalibrate."
         cal = calibration if not calibrating else None
 
