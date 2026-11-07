@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a Tap Becomes a Note</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<div class="crumbs">Lesson 1 · <a href="../reference/changes-map.html">Reference: every change, plan by plan</a></div>
+<h1>How a tap becomes a note</h1>
+<p class="subtitle">Three workers, one meeting point, four lines of glue.</p>
+
+<div class="win"><strong>Your win for this lesson:</strong> given a finger, the key the camera sees it on, and how hard it tapped, you can say which note plays, how loud, and which line of code decides each part. Takes about 10 minutes.</div>
+
+<h2>Three workers</h2>
+<p>When you run <code>python phone_server.py --camera 1 --tap</code>, three things run at the same time inside one Python process:</p>
+<ol>
+  <li><strong>The camera thread</strong> finds your hand in each frame and works out which paper key each fingertip is over. It writes the answer into a shared dict, <code>latest_fingers</code>.</li>
+  <li><strong>The strap thread</strong> receives about 200 accelerometer samples per second per finger over Bluetooth. Each time a finger spikes, it adds an <em>event</em> to a queue.</li>
+  <li><strong>The display loop</strong> is the program's main loop. About 30 times a second it draws the windows, and it is the <em>only</em> place where camera data and strap data meet.</li>
+</ol>
+<span class="note">Camera: <code>process_frame</code>, phone_server.py:227. Strap: <code>TapMonitor</code>, tap_view.py:52. Meeting point: phone_server.py:507–516.</span>
+
+<figure>
+<svg viewBox="0 0 640 230" role="img" aria-label="Camera thread writes latest_fingers, strap thread writes events, display loop reads both and drives TapLog and NotePlayer">
+  <rect class="box" x="10" y="20" width="170" height="60" rx="6"/>
+  <text x="95" y="45" text-anchor="middle">Camera thread</text>
+  <text x="95" y="65" text-anchor="middle" class="small">MediaPipe → region_at()</text>
+  <rect class="box" x="10" y="140" width="170" height="60" rx="6"/>
+  <text x="95" y="165" text-anchor="middle">Strap thread</text>
+  <text x="95" y="185" text-anchor="middle" class="small">asyncio · on_sample()</text>
+
+  <path class="wire" d="M180 50 H250"/>
+  <text x="215" y="40" text-anchor="middle" class="small">latest_fingers</text>
+  <text x="215" y="66" text-anchor="middle" class="small">{"Index": 3}</text>
+  <path class="wire" d="M180 170 H250"/>
+  <text x="215" y="160" text-anchor="middle" class="small">events</text>
+  <text x="215" y="186" text-anchor="middle" class="small">(t, "index", 1.2)</text>
+
+  <rect class="box hot" x="250" y="20" width="190" height="180" rx="6"/>
+  <text x="345" y="48" text-anchor="middle">Display loop</text>
+  <text x="345" y="68" text-anchor="middle" class="small">~30 times a second</text>
+  <text x="345" y="100" text-anchor="middle" class="small">fingers = dict(latest_fingers)</text>
+  <text x="345" y="120" text-anchor="middle" class="small">for … in tap.pop_events():</text>
+  <text x="345" y="140" text-anchor="middle" class="small">key = fingers.get(finger.capitalize())</text>
+  <text x="345" y="175" text-anchor="middle" class="small">phone_server.py:507</text>
+
+  <path class="wire" d="M440 70 H480"/>
+  <path class="wire" d="M440 160 H480"/>
+  <rect class="box" x="480" y="40" width="150" height="55" rx="6"/>
+  <text x="555" y="64" text-anchor="middle">TapLog</text>
+  <text x="555" y="82" text-anchor="middle" class="small">recordings/taps_*.csv</text>
+  <rect class="box" x="480" y="130" width="150" height="55" rx="6"/>
+  <text x="555" y="154" text-anchor="middle">NotePlayer</text>
+  <text x="555" y="172" text-anchor="middle" class="small">MIDI → GS synth</text>
+</svg>
+<figcaption>Each thread writes only its own data. The display loop is the only reader of both, so it can join them without extra locking.</figcaption>
+</figure>
+
+<p><strong>Why join them in the display loop?</strong> It already holds a fresh copy of the finger dict for drawing. Matching taps there costs no new threads and no new locks. The price is delay: a tap can wait up to one frame, about 33 ms, before it's matched. That fits the 50 ms tap-to-sound target in <a href="../METRICS.md">METRICS.md</a>, but it's the first place to look if notes ever feel late.</p>
+
+<h2>The four steps</h2>
+
+<h3>1 · Camera: which key is each fingertip on?</h3>
+<pre><code>fingers = {name: region_at(cal, hand[k].x, hand[k].y)
+           for name, k in FINGERTIPS.items()}
+# → {"Thumb": 1, "Index": 3, "Middle": 5, "Ring": None, "Pinky": 8}</code></pre>
+<p>MediaPipe gives 21 landmarks per hand. The fingertips are numbers 4, 8, 12, 16 and 20 (index tip = 8, <a href="https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker">per Google's docs</a>). <code>region_at</code> looks up the calibrated key under that point. Note the <strong>capital letters</strong>: they come from <code>FINGERTIPS</code> in calibration.py:11.</p>
+<span class="note">phone_server.py:211, <code>hand_fingers()</code>. Plan 014 added picking the strap hand when two hands are visible.</span>
+
+<h3>2 · Strap: did a finger just tap?</h3>
+<pre><code>dev = abs(m - 1.0)                    # how far from resting gravity (1 g)
+if dev &gt; TAP_G and not self.above[f] \
+        and host_time - self.last_tap[f] &gt;= REFRACTORY_S:
+    self.events.append((host_time, f, dev))</code></pre>
+<p>A finger at rest feels 1 g (gravity), so <code>dev</code> is about 0. An event fires only when all three are true:</p>
+<ul>
+  <li>the deviation is <strong>over 0.5 g</strong> (<code>TAP_G</code>);</li>
+  <li>the previous sample was <strong>under</strong> it, so one long spike counts once;</li>
+  <li>it has been <strong>at least 0.15 s</strong> (<code>REFRACTORY_S</code>) since that finger's last tap, so bounce and ringing are ignored.</li>
+</ul>
+<p>Strap finger names are <strong>lowercase</strong> (<code>"index"</code>).</p>
+<span class="note">tap_view.py:97–112. Both thresholds are guesses until they're tuned on a real recording.</span>
+
+<h3>3 · The join: one dictionary lookup</h3>
+<pre><code>for host_time, finger, peak in tap.pop_events():
+    key = fingers.get(finger.capitalize())   # "index" → "Index" → 3
+    tap_log.add(host_time, finger, key, peak)</code></pre>
+<p>This one line is the whole connection between the two halves of the project. <code>pop_events()</code> empties the queue under a lock, so each tap is handled exactly once. Every tap is logged, including taps that land on no key; those are stored with key <code>0</code>.</p>
+<div class="card"><strong>A bug worth remembering.</strong> In my first version of the Tap window, the key column always showed <code>-</code>. The camera's dict said <code>"Index"</code> and the strap's names said <code>"index"</code>, so every lookup missed and returned <code>None</code>. There was no error to see. Plan 013 fixed it with <code>.capitalize()</code> here and <code>.lower()</code> in <code>render()</code>, and added a test for it (<code>test_render_accepts_camera_finger_names</code>). When two subsystems name the same thing, check that they spell it the same way.</div>
+
+<h3>4 · Sound: key → note, peak → loudness</h3>
+<pre><code>note     = base_note + key - 1                         # key 1 = 60 = middle C
+velocity = int(40 + clamp((peak - 0.5) / 2.5, 0, 1) * 87)  # 40 … 127</code></pre>
+<p>MIDI notes and velocities both run from 0 to 127 (<a href="https://mido.readthedocs.io/en/stable/message_types.html">mido: Message Types</a>). The paper keys are numbered left to right in chromatic order, so each key to the right is one semitone up. A note is stopped by a timer, not by your finger. <code>play()</code> records "stop at now + 0.3 s", and <code>update()</code>, which runs every frame, sends <code>note_off</code> once that time has passed.</p>
+<span class="note">sound.py:9–37. The fixed 0.3 s is a stand-in until there's a way to detect a finger lifting off.</span>
+
+<h2>Try it: trace a tap</h2>
+<p>Before you move a control, predict the result. This uses the same formulas as the code.</p>
+<div class="card">
+  <div class="controls">
+    <label>Finger <select id="finger"><option>thumb</option><option selected>index</option><option>middle</option><option>ring</option><option>pinky</option></select></label>
+    <label>Camera sees it on <select id="key"><option value="0">no key</option></select></label>
+    <label>Base note <select id="base"><option value="48">48 (C3)</option><option value="60" selected>60 (C4)</option><option value="72">72 (C5)</option></select></label>
+    <label>Peak deviation: <span id="pv"></span> g <input id="peak" type="range" min="0" max="4" step="0.05" value="1.2"></label>
+  </div>
+  <div class="out" id="out"></div>
+</div>
+
+<h2>Check yourself</h2>
+<p>Answer from memory first, then scroll back if you have to. Recalling it is what makes it stick.</p>
+<div class="quiz" id="quiz"></div>
+
+<h2>One open question</h2>
+<p><code>--tap-hand right</code> currently looks for the hand MediaPipe labels <code>"Left"</code> (phone_server.py:412). That follows MediaPipe's older rule that labels assume a mirrored, selfie-style image. Google's <a href="https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker">current Hand Landmarker page</a> says labels refer to the subject's own hands and that only a mirrored image swaps them. If that's true for your camera, the mapping is backwards. Your first live test will settle it: wear the strap, show only that hand, and see whether the Tap window's key column fills.</p>
+
+<h2>Read next</h2>
+<p><strong>Primary source:</strong> <a href="../phone_server.py">phone_server.py</a> lines 507–516 and <a href="../sound.py">sound.py</a> (40 lines). Together they're the whole pipeline's glue. For the MIDI side, <a href="https://mido.readthedocs.io/en/stable/message_types.html">mido's Message Types page</a> lists every message and its value range.</p>
+<p>Every change and how it was made: <a href="../reference/changes-map.html">the changes map</a>.</p>
+
+<p class="ask">Something unclear? Ask me in the terminal: “why a deque?”, “what does asyncio.run in a thread do?”, “show me the test for X”. I'm your teacher here, and next lesson we can go into whichever part you want.</p>
+</main>
+
+<script src="../assets/quiz.js"></script>
+<script>
+const NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const noteName = n => NAMES[n % 12] + (Math.floor(n / 12) - 1);
+const keySel = document.getElementById("key");
+for (let k = 1; k <= 12; k++) keySel.add(new Option("key " + k, k, false, k === 3));
+function trace() {
+  const f = document.getElementById("finger").value;
+  const key = +keySel.value, base = +document.getElementById("base").value;
+  const p = +document.getElementById("peak").value;
+  document.getElementById("pv").textContent = p.toFixed(2);
+  const cam = f[0].toUpperCase() + f.slice(1);
+  let s = "";
+  if (p <= 0.5) {
+    s = `dev ${p.toFixed(2)} g  ≤ TAP_G 0.5 g\n→ no event. Nothing is logged and nothing plays.`;
+  } else {
+    s += `1  strap event:  (t, "${f}", ${p.toFixed(2)})\n`;
+    s += `2  lookup:       fingers.get("${cam}") → ${key || "None"}\n`;
+    s += `3  log row:      t, ${f}, ${key || 0}, ${p.toFixed(3)}\n`;
+    if (!key) {
+      s += `4  no key → logged only, silent`;
+    } else {
+      const note = base + key - 1;
+      const v = Math.floor(40 + Math.min(Math.max((p - 0.5) / 2.5, 0), 1) * 87);
+      s += `4  note = ${base} + ${key} - 1 = ${note} (${noteName(note)}),  velocity ${v}\n`;
+      s += `   note_off sent by update() about 0.3 s later`;
+    }
+  }
+  document.getElementById("out").textContent = s;
+}
+document.querySelectorAll("select, input").forEach(el => el.addEventListener("input", trace));
+trace();
+
+Quiz.mount(document.getElementById("quiz"), [
+  { q: "Which thread calls <code>player.play()</code>?",
+    options: ["The display loop thread", "The Tap Strap thread", "The camera processing thread", "The Flask server thread"],
+    answer: 0, why: "Taps are matched and played in the display loop (phone_server.py:509–514), the only place that sees both data sources." },
+  { q: "Index finger on key 5, <code>--base-note 48</code>. Which MIDI note plays?",
+    options: ["Note 53", "Note 48", "Note 52", "Note 60"],
+    answer: 2, why: "base + key − 1 = 48 + 5 − 1 = 52. Key 1 is the base note itself." },
+  { q: "A tap's deviation peaks at 0.4 g. What happens?",
+    options: ["Quiet note, velocity forty", "Silent event, logged only", "Loud note, velocity max", "No event, below threshold"],
+    answer: 3, why: "An event needs dev over TAP_G = 0.5 g. Under that, the strap thread records nothing, so there's nothing to log." },
+  { q: "Why did the Tap window's key column always show “-” before plan 013?",
+    options: ["Calibration file failed to load", "Finger names differed in capitalisation", "Camera ran slower than strap", "Strap thread held the lock"],
+    answer: 1, why: "The camera used \"Index\" and the strap used \"index\", so every dict lookup returned None, with no error." },
+  { q: "The index finger taps twice, 0.1 s apart, both well above 0.5 g. How many notes play?",
+    options: ["One, refractory blocks second", "Two, both crossed threshold", "Zero, taps too close", "Three, includes the bounce"],
+    answer: 0, why: "REFRACTORY_S is 0.15 s per finger, so a second crossing 0.1 s later is ignored." },
+  { q: "What ends a note that is sounding?",
+    options: ["Lifting the finger off", "The next tap's note", "A timer in update()", "The strap's release event"],
+    answer: 2, why: "play() schedules note_off for 0.3 s later, and update() sends it from the display loop. Detecting a finger lift is future work." },
+]);
+</script>
+</body>
+</html>

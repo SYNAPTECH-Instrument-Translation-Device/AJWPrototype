@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changes Map</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<div class="crumbs">Reference · <a href="../lessons/0001-how-a-tap-becomes-a-note.html">Lesson 1: How a tap becomes a note</a></div>
+<h1>Changes map</h1>
+<p class="subtitle">Every change from this session: what was wrong, what changed, and where it lives.</p>
+
+<h2>How the work was done</h2>
+<ol>
+  <li><strong>Merge (in your baseline commit <code>c6e260f</code>).</strong> I wrote <code>tap_view.py</code>, added the <code>--tap</code> flags, opened the Tap Strap window, and removed the black-and-white mask window.</li>
+  <li><strong>Audit.</strong> The <code>/improve</code> skill read the whole repo and listed problems with evidence. It then wrote one step-by-step plan per fix in <code>plans/</code>, each with exact commands and "done" checks.</li>
+  <li><strong>Execute and review.</strong> For each plan, a cheaper agent did the work in its own throwaway copy of the repo (a git worktree). I re-ran the checks, read every line it changed, then merged it into <code>pipeline</code>. You've since merged <code>pipeline</code> into <code>main</code>.</li>
+</ol>
+
+<h2>The changes, in the order they landed</h2>
+<div class="table-wrap">
+<table>
+<tr><th>Plan</th><th>Problem</th><th>What changed, and how</th><th>Where · test</th></tr>
+<tr><td>merge</td><td>The strap only had terminal output. The mask window was clutter.</td>
+<td><code>TapMonitor</code> runs the strap stream in a background thread with its own asyncio loop and draws an OpenCV image of bars. The mask from <code>detect_paper</code> is now ignored: <code>annotated, _ = …</code></td>
+<td>tap_view.py:52 · phone_server.py:234 · tests/test_tap_view.py</td></tr>
+<tr><td>011</td><td>Your web-upload merge lost the camera repo's last commit, so <code>--https</code> crashed.</td>
+<td>Put upstream's code back exactly: <code>run_server(use_https)</code> with <code>ssl_context</code>, a camera backend chosen per OS (<code>sys.platform</code>), and a 30-try camera-list loop.</td>
+<td>phone_server.py:161, 173, 350 · <code>--help</code></td></tr>
+<tr><td>012</td><td>The SDK came from a moving git branch. A stray <code>package.json</code> was left over.</td>
+<td>Pinned <code>tap-python-sdk</code> to commit <code>e92d130</code> in requirements.txt. Deleted package.json.</td>
+<td>requirements.txt</td></tr>
+<tr><td>009</td><td>Tests read your real <code>calibration/</code> folder. Rotating the phone and back didn't reload the calibration. The README file list was incomplete.</td>
+<td>Tests patch <code>CALIBRATION_DIR</code> to a temp folder. <code>checked_size</code> replaces a one-shot flag, so the saved calibration is retried once per frame size. The executor caught a bug in my plan (one rotated frame never reloaded); the fix is that a size mismatch now records the new size too.</td>
+<td>phone_server.py:253, 283 · tests/test_server.py</td></tr>
+<tr><td>013</td><td>The key column always showed <code>-</code> (my bug). There was no sign when the strap went quiet. Quitting could skip restoring typing mode.</td>
+<td><code>render()</code> lowercases the camera's names. <code>display_status()</code> says "no data" after 1 s without samples. <code>_run</code> always calls <code>stream.stop()</code> in <code>finally</code>, and <code>stop()</code> waits up to 5 s.</td>
+<td>tap_view.py:72, 78, 121, 127 · 3 tests</td></tr>
+<tr><td>014</td><td>With two hands in view, the key column showed whichever hand was found first.</td>
+<td><code>hand_fingers()</code> returns the strap hand's fingers (chosen by MediaPipe's handedness label) plus every touched key from both hands, which are all highlighted. Added <code>--tap-hand</code>. The label mapping is still unverified; see lesson 1.</td>
+<td>phone_server.py:211, 412 · HandFingersTests</td></tr>
+<tr><td>015</td><td>Bars only, no discrete taps.</td>
+<td><code>on_sample</code> detects when a finger crosses <code>TAP_G</code>, with a 0.15 s refractory period, into a deque. The display loop drains it with <code>pop_events()</code>, matches each tap to a key and writes a row to <code>TapLog</code> (CSV, flushed every row).</td>
+<td>tap_view.py:28, 97, 114 · phone_server.py:509 · 4 tests</td></tr>
+<tr><td>016</td><td>No sound: the last link of the pipeline.</td>
+<td><code>sound.py</code>: <code>key_note</code>, <code>tap_velocity</code>, and <code>NotePlayer</code> (mido → default MIDI output, timed <code>note_off</code>). Added the <code>--program</code>, <code>--base-note</code> and <code>--no-sound</code> flags. If MIDI isn't available, the app prints "Sound off" and keeps running.</td>
+<td>sound.py · phone_server.py:416–420, 513, 542 · tests/test_sound.py (fake port)</td></tr>
+</table>
+</div>
+
+<h2>Constants you might tune</h2>
+<table>
+<tr><th>Name</th><th>Value</th><th>Meaning</th></tr>
+<tr><td><code>TAP_G</code></td><td>0.5 g</td><td>Deviation from 1 g a finger must exceed to count as a tap</td></tr>
+<tr><td><code>REFRACTORY_S</code></td><td>0.15 s</td><td>Shortest time between two taps of the same finger</td></tr>
+<tr><td><code>STALE_S</code></td><td>1.0 s</td><td>Time without samples before the window says "no data"</td></tr>
+<tr><td><code>HALF_LIFE_S</code></td><td>0.1 s</td><td>How fast the bars fall back</td></tr>
+<tr><td><code>NOTE_S</code></td><td>0.3 s</td><td>Fixed note length (stand-in for lift detection)</td></tr>
+<tr><td><code>tap_velocity</code></td><td>0.5 → 40, 3.0 g → 127</td><td>Maps tap strength to loudness</td></tr>
+</table>
+
+<h2>Commits since your baseline</h2>
+<pre><code>git log --oneline c6e260f..HEAD     # 20 commits
+git show 26a06e0                   # e.g. "Detect strap taps as events"</code></pre>
+</main>
+</body>
+</html>
