@@ -12,15 +12,21 @@ Plans are listed in execution order where they depend on each other. Each one sa
 | 006 | [Piano ordering, small keys, rotation](006-piano-ordering-small-keys-rotation.md) | DONE: merged to main (aa9324e) | 005 |
 | 007 | [Live calibration sliders](007-calibration-sliders.md) | DONE: merged to main (fb2dadb) | 006 |
 | 008 | [Strap import + M0 tools](008-strap-import-and-m0-tools.md) | DONE: merged to main (97f37e6); awaiting strap for real sessions | 007 |
-| 009 | [Test isolation, calibration reload, README structure](009-test-isolation-calibration-reload-readme.md) | TODO (planned at ce1af56, 2026-11-03) | — |
+| 009 | [Test isolation, calibration reload, README structure](009-test-isolation-calibration-reload-readme.md) | DONE: reviewed (one review fix), merged to pipeline | 011 |
 | 010 | [Seal faint keyboard borders (printed piano on white desk)](010-seal-faint-keyboard-borders.md) | DONE: reviewed and approved, merged to main (810b120, 0df79c5) on 2026-11-03; 36 tests OK, 24/24 chromatic on all 3 user photos | — (independent of 009) |
+| 011 | [Restore --https, macOS camera, camera-list retry lost in the merge](011-restore-upstream-https-and-macos-camera.md) | DONE: reviewed, merged to pipeline (20bd555) | — |
+| 012 | [Pin the Tap SDK, drop the demo package.json](012-pin-tap-sdk-drop-package-json.md) | DONE: reviewed, merged to pipeline (4f35b4a) | — |
+| 013 | [Tap window: camera finger names, stale status, clean shutdown](013-tap-window-names-liveness-shutdown.md) | DONE: reviewed, merged to pipeline | — |
+| 014 | [Strap-hand selection (`--tap-hand`), highlight both hands](014-strap-hand-selection.md) | DONE: reviewed, merged to pipeline (20f51a8) | 013 (and after 009/011 to avoid conflicts) |
+| 015 | [Strap taps → key events, CSV log](015-tap-to-key-events.md) | DONE: reviewed, merged to pipeline (bb9afae) | 013, 014 |
+| 016 | [Play notes over MIDI (`--program`, `--base-note`)](016-play-notes-over-midi.md) | DONE: reviewed, merged to pipeline (d4f45aa) | 012, 015 |
 
-## Open findings, not planned yet (audit 2026-11-03, at ce1af56)
+## Open findings, not planned yet (audit 2026-11-06, at c6e260f)
 
-- **The second hand is ignored.** `phone_server.py:254-259` maps only `hand_landmarks[0]`, and the `fingers` dict is keyed by finger name, so two hands would collide. Meanwhile `num_hands=2` (`:73`). This must land before plan 003 is rewritten.
-- **The Tap SDK is unpinned.** `requirements.txt:5` installs tap-python-sdk from git with no commit pinned, and `tapstrap/stream.py:60,84-86` uses its private internals (`on_raw_data` override, `_write_input_mode`, `input_mode_refresh`). The venv has commit `e92d13011ff95f2182604b130aeda633c225cd20`. Pin with `@<sha>`.
-- **The slider/trackbar logic is untested.** It sits inline in `__main__` (`phone_server.py:362-424`), and the sens↔ink_ratio formula is written twice (`:399`, `:404`).
-- **Direction:** note output (MIDI mapping + a mido synth behind a swappable trigger, so a strap tap can replace hover later); an end-to-end latency harness (METRICS "Still to measure").
+- **Repo of record:** this repo (AJWPrototype) is now the master, as the user said on 2026-11-06. The camera repo and demo-repository are upstream of nothing. Port anything still committed there by hand; plan 011 exists because one commit was missed.
+- **LICENSE copyright** says jennifer-m-gao (demo repo); the camera repo said Alex. This is the user's decision, not a plan.
+- **The slider/trackbar logic is untested** (carried over): it's inline in `__main__`, and the sens↔ink_ratio formula is written twice.
+- **Direction after 016:** an end-to-end latency harness (METRICS "Still to measure"), lift detection for note length, and note names/scales.
 
 ## Decisions from the design-doc grilling (2026-10-29)
 
@@ -33,6 +39,9 @@ Plans are listed in execution order where they depend on each other. Each one sa
 - **Reminder owed to the user:** when 002 lands, take 3 S-key snapshots (normal light, dim light, slight tilt) for fixtures.
 
 ## Considered and rejected
+
+- Deleting `tap_strap_live.py` / `hello_tap.py` (2026-11-06): they're teammates' standalone strap scripts and still run. Plan 009 documents them as not used by the app.
+- Restoring upstream's `finally:` block (2026-11-06): the local Windows `TerminateProcess` exit isn't in upstream `77d5cbd`; it's a local fix and stays.
 
 - Binding to 127.0.0.1: the transport may move to LAN HTTPS, which needs LAN reachability.
 - The ngrok URL in git history: it's a hostname, not a credential.
