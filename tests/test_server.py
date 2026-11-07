@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -114,6 +115,48 @@ class ServerTests(unittest.TestCase):
         self.client.post("/frame", data=jpeg_bytes())
         self.client.post("/frame", data=jpeg_bytes())
         self.assertEqual(phone_server.frames_received, before + 2)
+
+
+def make_hand(x):
+    return [types.SimpleNamespace(x=x, y=0.5) for _ in range(21)]
+
+
+def make_result(hands):
+    return types.SimpleNamespace(
+        hand_landmarks=[make_hand(x) for _, x in hands],
+        handedness=[[types.SimpleNamespace(category_name=label)] for label, _ in hands],
+    )
+
+
+class HandFingersTests(unittest.TestCase):
+    def setUp(self):
+        km = np.zeros((100, 100), int)
+        km[:, :50] = 1
+        km[:, 50:] = 2
+        self.cal = {"frame_size": (100, 100), "key_map": km}
+        self.both = make_result([("Left", 0.2), ("Right", 0.8)])
+
+    def test_first_hand_without_strap_label(self):
+        fingers, touched = phone_server.hand_fingers(self.both, self.cal, None)
+        self.assertEqual(set(fingers.values()), {1})
+        self.assertEqual(len(fingers), 5)
+        self.assertEqual(touched, {1, 2})
+
+    def test_strap_label_picks_that_hand(self):
+        fingers, touched = phone_server.hand_fingers(self.both, self.cal, "Right")
+        self.assertEqual(set(fingers.values()), {2})
+        self.assertEqual(len(fingers), 5)
+        self.assertEqual(touched, {1, 2})
+
+    def test_strap_hand_missing(self):
+        result = make_result([("Left", 0.2)])
+        fingers, touched = phone_server.hand_fingers(result, self.cal, "Right")
+        self.assertEqual(fingers, {})
+        self.assertEqual(touched, {1})
+
+    def test_no_hands(self):
+        result = make_result([])
+        self.assertEqual(phone_server.hand_fingers(result, self.cal, "Right"), ({}, set()))
 
 
 if __name__ == "__main__":

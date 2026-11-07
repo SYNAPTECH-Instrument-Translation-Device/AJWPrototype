@@ -50,6 +50,7 @@ calibrating = False
 calibration_frames = []
 latest_raw = None
 latest_fingers = {}
+strap_label = None          # MediaPipe label of the strap hand; None = first hand.
 status_text = "Press C to calibrate."
 SETTINGS_WINDOW = "Calibration settings"
 ink_ratio_setting = INK_RATIO
@@ -207,6 +208,22 @@ def camera_loop(index):
             time.sleep(0.05)
 
 
+def hand_fingers(result, cal, strap_label=None):
+    """Return (fingers of the chosen hand, regions under any fingertip).
+
+    The chosen hand is the one MediaPipe labels strap_label, or the first hand if
+    strap_label is None. fingers is {} when that hand isn't visible.
+    """
+    chosen, touched = {}, set()
+    for i, hand in enumerate(result.hand_landmarks):
+        fingers = {name: region_at(cal, hand[k].x, hand[k].y) for name, k in FINGERTIPS.items()}
+        touched |= {r for r in fingers.values() if r}
+        label = result.handedness[i][0].category_name if i < len(result.handedness) else None
+        if (strap_label is None and i == 0) or (strap_label is not None and label == strap_label):
+            chosen = fingers
+    return chosen, touched
+
+
 def process_frame(frame):
     global latest_frame, last_timestamp_ms
     global calibration, checked_size, calibrating, calibration_frames
@@ -269,15 +286,8 @@ def process_frame(frame):
 
     fingers = {}
     if cal is not None:
-        if result.hand_landmarks:
-            hand = result.hand_landmarks[0]
-            fingers = {
-                name: region_at(cal, hand[i].x, hand[i].y)
-                for name, i in FINGERTIPS.items()
-            }
-        annotated = draw_calibration(
-            annotated, cal, {r for r in fingers.values() if r}
-        )
+        fingers, touched = hand_fingers(result, cal, strap_label)
+        annotated = draw_calibration(annotated, cal, touched)
 
     # Draw detected hand landmarks on top of the overlay.
     annotated = draw_hand_landmarks(annotated, result)
@@ -373,6 +383,10 @@ if __name__ == "__main__":
     parser.add_argument("--tap", action="store_true", help="also stream a Tap Strap into a 'Tap Strap' window")
     parser.add_argument("--tap-demo", action="store_true", help="like --tap, but with synthetic data (no strap)")
     parser.add_argument("--tap-address", metavar="ADDR", help="Tap Strap BLE address (default: first found)")
+    parser.add_argument(
+        "--tap-hand", choices=["left", "right"], default="right",
+        help="hand wearing the strap; its fingers fill the Tap window's key column",
+    )
     args = parser.parse_args()
     if args.list_cameras:
         list_cameras()
@@ -387,6 +401,8 @@ if __name__ == "__main__":
     threading.Thread(target=process_loop, daemon=True).start()
     tap = None
     if args.tap or args.tap_demo:
+        # MediaPipe labels hands as if the image were mirrored; ours aren't, so swap.
+        strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
         tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
         tap.start()
 
