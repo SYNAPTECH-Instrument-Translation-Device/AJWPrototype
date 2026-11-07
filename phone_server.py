@@ -387,6 +387,11 @@ if __name__ == "__main__":
         "--tap-hand", choices=["left", "right"], default="right",
         help="hand wearing the strap; its fingers fill the Tap window's key column",
     )
+    parser.add_argument("--program", type=int, default=0, metavar="N",
+                        help="General MIDI instrument 0-127 for tapped keys (0 = piano, 40 = violin)")
+    parser.add_argument("--base-note", type=int, default=60, metavar="N",
+                        help="MIDI note for paper key 1 (60 = middle C)")
+    parser.add_argument("--no-sound", action="store_true", help="log taps without playing notes")
     args = parser.parse_args()
     if args.list_cameras:
         list_cameras()
@@ -401,12 +406,19 @@ if __name__ == "__main__":
     threading.Thread(target=process_loop, daemon=True).start()
     tap = None
     tap_log = None
+    player = None
     if args.tap or args.tap_demo:
         # MediaPipe labels hands as if the image were mirrored; ours aren't, so swap.
         strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
         tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
         tap.start()
         tap_log = TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        if not args.no_sound:
+            try:
+                from sound import NotePlayer, key_note, tap_velocity
+                player = NotePlayer(program=args.program)
+            except Exception as error:  # No MIDI output or missing package: keep running silently.
+                print(f"Sound off: {error}")
 
     print(f"Waiting for {source}. C = calibrate, S = save frame, Q = quit.")
 
@@ -498,6 +510,10 @@ if __name__ == "__main__":
                     # Strap names are lowercase; camera names are capitalised.
                     key = fingers.get(finger.capitalize())
                     tap_log.add(host_time, finger, key, peak)
+                    if player is not None and key:
+                        player.play(key_note(key, args.base_note), tap_velocity(peak))
+                if player is not None:
+                    player.update()
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -523,6 +539,8 @@ if __name__ == "__main__":
         # Don't call hand_landmarker.close(): it can block forever while the
         # worker thread is mid-detection, which froze the terminal on Ctrl+C.
         # Exiting the process frees the model, camera and windows anyway.
+        if player is not None:
+            player.close()
         if tap_log is not None:
             print(tap_log.summary())
             tap_log.close()

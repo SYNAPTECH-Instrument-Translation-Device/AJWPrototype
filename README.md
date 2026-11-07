@@ -179,6 +179,10 @@ A **Tap Strap** window opens next to the camera feed. Each finger has a live acc
 
 Each strap tap is logged to `recordings/taps_<time>.csv` (time, finger, the key the camera saw that finger on, peak g). On quit the app prints how many taps landed on a key.
 
+Taps on a key play a note through the computer's MIDI synth (on Windows, the built-in GS Wavetable Synth): key 1 is `--base-note` (default 60, middle C), and each key to the right is a semitone up. `--program N` picks the General MIDI instrument (0 piano, 24 guitar, 40 violin, 73 flute). Harder taps play louder. `--no-sound` only logs.
+
+To try the full pipeline without a strap: calibrate a paper keyboard (C), then run with `--tap-demo` and hold your hand over the keys. The demo strap taps each finger about once a second.
+
 ## Tests
 
 Run the unit tests from the repo root:
