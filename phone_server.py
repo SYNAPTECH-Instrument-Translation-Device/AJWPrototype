@@ -24,6 +24,7 @@ from calibration import (
     save_calibration,
 )
 from paper_detector import detect_paper
+from tap_view import TapMonitor
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -34,7 +35,6 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 latest_frame = None
-latest_mask = None
 frame_lock = threading.Lock()
 landmarker_lock = threading.Lock()
 last_timestamp_ms = 0
@@ -192,13 +192,13 @@ def camera_loop(index):
 
 
 def process_frame(frame):
-    global latest_frame, latest_mask, last_timestamp_ms
+    global latest_frame, last_timestamp_ms
     global calibration, calibration_checked, calibrating, calibration_frames
     global latest_raw, latest_fingers, status_text
     global ink_ratio_setting, line_kernel_setting
 
     # Detect the paper.
-    annotated, mask = detect_paper(frame)
+    annotated, _ = detect_paper(frame)
 
     # Convert BGR (OpenCV) to RGB (MediaPipe).
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -266,7 +266,6 @@ def process_frame(frame):
 
     with frame_lock:
         latest_frame = annotated
-        latest_mask = mask
         latest_fingers = fingers
 
 
@@ -339,6 +338,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--list-cameras", action="store_true", help="print working camera indices and exit",
     )
+    parser.add_argument("--tap", action="store_true", help="also stream a Tap Strap into a 'Tap Strap' window")
+    parser.add_argument("--tap-demo", action="store_true", help="like --tap, but with synthetic data (no strap)")
+    parser.add_argument("--tap-address", metavar="ADDR", help="Tap Strap BLE address (default: first found)")
     args = parser.parse_args()
     if args.list_cameras:
         list_cameras()
@@ -351,6 +353,10 @@ if __name__ == "__main__":
         threading.Thread(target=camera_loop, args=(args.camera,), daemon=True).start()
         source = f"camera {args.camera}"
     threading.Thread(target=process_loop, daemon=True).start()
+    tap = None
+    if args.tap or args.tap_demo:
+        tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
+        tap.start()
 
     print(f"Waiting for {source}. C = calibrate, S = save frame, Q = quit.")
 
@@ -379,11 +385,6 @@ if __name__ == "__main__":
                 frame = (
                     latest_frame.copy()
                     if latest_frame is not None
-                    else None
-                )
-                mask = (
-                    latest_mask.copy()
-                    if latest_mask is not None
                     else None
                 )
                 status = status_text
@@ -441,9 +442,8 @@ if __name__ == "__main__":
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1,
                 )
             cv2.imshow("Phone Camera Feed", frame)
-
-            if mask is not None:
-                cv2.imshow("Paper Detection Mask", mask)
+            if tap is not None:
+                cv2.imshow("Tap Strap", tap.render(fingers))
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -469,6 +469,8 @@ if __name__ == "__main__":
         # Don't call hand_landmarker.close(): it can block forever while the
         # worker thread is mid-detection, which froze the terminal on Ctrl+C.
         # Exiting the process frees the model, camera and windows anyway.
+        if tap is not None:
+            tap.stop()  # Puts the strap back in normal typing mode.
         cv2.destroyAllWindows()
         if os.name == "nt":
             # os._exit still runs DLL cleanup, which can deadlock with Camo's

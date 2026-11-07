@@ -40,6 +40,8 @@ These are numbers worth keeping for write-ups and résumé bullets. Every entry 
 |---|---|---|---|
 | 2026-10-29 | Tap detector and analysis pipeline, checked on synthetic 200 Hz recordings with known taps and 30% crosstalk | Precision 1.00 and recall 1.00 on all 5 fingers; crosstalk measured at 0.30 (matches what was built in); 200 Hz, 0 gaps, batching measured correctly | Synthetic tests |
 | 2026-10-29 | Labelled-data tooling | Guided recording sessions (taps, press-hold-lift, idle) that save ML-ready labelled CSVs | By design |
+| 2026-11-06 | Live Tap Strap view inside the camera app (`--tap` / `--tap-demo`) | Finger data streamed into an OpenCV window at **200 Hz** next to the camera feed; each finger's activity bar shows beside the key the camera sees that fingertip on | Synthetic (demo stream, headless render) |
+| 2026-11-06 | Tap window responsiveness | Bars decay with a 0.1 s half-life, independent of the window's redraw rate. A bar turns red above 0.5 g; full scale is 2 g (both still guesses, to tune on the real strap) | By design |
 
 ## Engineering quality
 
@@ -49,6 +51,9 @@ These are numbers worth keeping for write-ups and résumé bullets. Every entry 
 | 2026-10-29 | Automated tests (later the same day) | 19 | 35 (server, calibration, real-photo fixtures, strap decoding, M0 analysis), all passing |
 | 2026-10-29 | Repos consolidated | Camera and strap code in separate repos | One master repo |
 | 2026-10-29 | Server hardening | No upload limit, CORS open to all sites, thread-unsafe ML calls | 2 MB cap, CORS removed, serialised landmarker with strictly increasing timestamps |
+| 2026-11-06 | Camera + strap integration | Two programs (camera server; strap scripts in a terminal or matplotlib) | One process: `phone_server.py --tap` runs hand tracking and strap streaming together |
+| 2026-11-06 | OpenCV windows in the camera app | Camera feed + black-and-white paper mask + settings | Camera feed + live Tap Strap view + settings (mask window removed) |
+| 2026-11-06 | Automated tests | 36 | 38 (adds Tap view tests), all passing |
 
 ## Still to measure (fill in later)
 
@@ -56,5 +61,7 @@ These are numbers worth keeping for write-ups and résumé bullets. Every entry 
 - **Camera freshness:** age of the fingertip data when a tap arrives (target: 100 ms or less). Today's tunnel round trip is probably around 150–200 ms (not yet measured).
 - **Speed with the laptop plugged in:** re-measure `proc` and `age` live on AC power at Best performance. Optional next step: skip paper detection on each frame once calibrated.
 - **Tap Strap:** tap detection precision and recall (±20 ms), and Bluetooth latency.
+- **Tap Strap live view on the real strap:** the sample rate it actually delivers, whether real taps cross the 0.5 g red threshold without resting fingers doing so, and whether the strap reliably returns to typing mode after Q.
+- **Tap ↔ key agreement:** for each strap tap, does the camera have that finger on a key at that moment? This is the first number that joins the two halves.
 - **Key accuracy:** percent correct per key in live play, especially at key edges, and how it changes with key size.
 - **Calibration success rate:** under normal light, dim light and a slight tilt.
