@@ -64,6 +64,7 @@ class TapMonitor:
         self.above = {f: False for f in FINGERS}   # Was the last sample over TAP_G?
         self.last_tap = {f: -1e9 for f in FINGERS}
         self.events = collections.deque(maxlen=64)  # (host_time_s, finger, peak_g)
+        self.listeners = []  # Extra (sample, host_time) callbacks, e.g. a session recorder.
 
     def start(self):
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
@@ -110,6 +111,8 @@ class TapMonitor:
                     self.above[f] = dev > TAP_G
             else:
                 self.gyro = sample.gyro_dps
+        for listener in self.listeners:
+            listener(sample, host_time)
 
     def pop_events(self):
         """Taps since the last call, oldest first: [(host_time_s, finger, peak_g)]."""
