@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from session import CHORDS, GuidedSession, HandLog, build_cues
+from session_analyze import analyze
 from tapstrap import FINGERS
 
 
@@ -74,6 +75,46 @@ class TestHandLog(unittest.TestCase):
             self.assertEqual(rows[0]["index_tip_x"], "0.0800")
             self.assertEqual(rows[0]["index_key"], "4")
             self.assertEqual(rows[0]["thumb_key"], "0")
+
+
+def write_csv(path, header, rows):
+    with open(path, "w", newline="") as f:
+        csv.writer(f).writerows([header] + rows)
+
+
+class TestAnalyze(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.prefix = str(Path(self.tmp.name) / "s")
+        write_csv(f"{self.prefix}_cues.csv", ["host_time_s", "kind", "fingers", "keys"], [
+            ["10.0", "tap", "index", "3"], ["13.0", "tap", "ring", "5"],
+            ["16.0", "chord", "index+middle", ""],
+            ["20.0", "idle_start", "", ""], ["30.0", "idle_end", "", ""]])
+        write_csv(f"{self.prefix}_events.csv", ["host_time_s", "finger", "key", "peak_g"], [
+            ["10.1", "index", "3", "1.0"], ["10.11", "middle", "3", "1.0"],
+            ["16.05", "index", "2", "1.0"], ["16.06", "middle", "3", "1.0"],
+            ["25.0", "pinky", "0", "1.0"], ["40.0", "thumb", "1", "1.0"]])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_scores(self):
+        report = "\n".join(analyze(self.prefix))
+        for s in ["tap detected: 1/2", "right key: 1/1", "tap cues with extra fingers: 1/2",
+                  "chord complete: 1/1", "chord exact: 1/1",
+                  "false taps while idle: 1 in 10 s (6.0/min)", "unmatched events: 1",
+                  "lag sweep: skipped"]:
+            self.assertIn(s, report)
+
+    def test_lag_sweep(self):
+        log = HandLog(f"{self.prefix}_hand.csv")
+        for t in (9.9, 9.95, 10.05, 10.08):
+            log.add(t, fake_hand(), {"Index": 2 if t < 10.05 else 3})
+        log.close()
+        report = analyze(self.prefix)
+        self.assertIn("lag 0 ms key acc: 1/1 (100%)", report)
+        self.assertIn("lag 100 ms key acc: 0/1 (0%)", report)
+        self.assertIn("lag best: 0 ms, 1/1 (100%)", report)
 
 
 if __name__ == "__main__":
