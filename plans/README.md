@@ -20,6 +20,10 @@ Plans are listed in execution order where they depend on each other. Each one sa
 | 014 | [Strap-hand selection (`--tap-hand`), highlight both hands](014-strap-hand-selection.md) | DONE: reviewed, merged to pipeline (20f51a8) | 013 (and after 009/011 to avoid conflicts) |
 | 015 | [Strap taps → key events, CSV log](015-tap-to-key-events.md) | DONE: reviewed, merged to pipeline (bb9afae) | 013, 014 |
 | 016 | [Play notes over MIDI (`--program`, `--base-note`)](016-play-notes-over-midi.md) | DONE: reviewed, merged to pipeline (d4f45aa) | 012, 015 |
+| 017 | [Guided accuracy session (G) + `session_analyze.py`](017-guided-accuracy-session.md) | TODO | — |
+| 018 | [Per-user tap calibration (T): per-finger thresholds, crosstalk](018-per-user-tap-calibration.md) | TODO | 017 |
+
+Design context for 017 and later: [design-press-accuracy.md](design-press-accuracy.md).
 
 ## Open findings, not planned yet (audit 2026-11-06, at c6e260f)
 
