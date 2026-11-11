@@ -69,6 +69,44 @@ Install and configure ngrok using its [official documentation](https://ngrok.com
 
 Keep both the Python server and ngrok running while using the camera.
 
+## Controls
+
+### Keys (click the Phone Camera Feed window first)
+
+| Key | What it does | When it works |
+|---|---|---|
+| `C` | Calibrate the paper keyboard. Keep your hands out of view for about a second. | Always |
+| `S` | Save the current camera frame to `samples/` (for debugging calibration). | Always |
+| `T` | Tap calibration: rest your hand 3 s, then tap each finger 5 times on the beeps. Saves `calibration/tap_profile.json`. | With `--tap` or `--tap-demo` |
+| `G` | Guided accuracy session: tap the named finger/key on each beep. Saves `recordings/session_<time>_*.csv`. | With `--session` and a strap, after `C` |
+| `Q` | Quit. Puts the strap back into normal typing mode. `Ctrl+C` in the terminal also works. | Always |
+
+### Windows
+
+| Window | What it shows |
+|---|---|
+| Phone Camera Feed | Camera image, detected paper keys (numbered), hand landmarks, status lines. Keys under a fingertip turn yellow. |
+| Calibration settings | **Sens** slider: raise if key lines are missed, lower if shadows become keys. **Key** slider: lower for small drawings. |
+| Tap Strap | One bar per finger (red = tap-sized spike), the key the camera sees each finger on, thumb gyro. Only with `--tap`/`--tap-demo`. |
+
+### Command-line options (`python phone_server.py ...`)
+
+| Option | What it does |
+|---|---|
+| `--camera N` | Use local camera N (e.g. the iPhone through Camo) instead of the phone web page. |
+| `--list-cameras` | Print working camera numbers and exit. |
+| `--https` | Serve the phone page over HTTPS with `cert.pem`/`key.pem` (no ngrok). |
+| `--tap` | Connect the Tap Strap (paired in Windows Bluetooth, Developer mode on). |
+| `--tap-demo` | Fake strap data, no hardware. |
+| `--tap-address ADDR` | Connect to a specific strap. |
+| `--tap-hand left\|right` | Which hand wears the strap (default `right`). |
+| `--program N` | MIDI instrument: 0 piano, 24 guitar, 40 violin, 73 flute. |
+| `--base-note N` | MIDI note of key 1 (default 60 = middle C). |
+| `--no-sound` | Log taps without playing notes. |
+| `--session` | Enable `G` (guided accuracy session). |
+
+Typical run: `python phone_server.py --camera 1 --tap`, press `C`, then `T` once per strap fit, then play.
+
 ## Local HTTPS (no ngrok)
 
 Phone browsers only allow camera access over HTTPS. Instead of ngrok, the server
@@ -184,6 +222,8 @@ Taps on a key play a note through the computer's MIDI synth (on Windows, the bui
 To try the full pipeline without a strap: calibrate a paper keyboard (C), then run with `--tap-demo` and hold your hand over the keys. The demo strap taps each finger about once a second.
 
 **Measuring accuracy.** Run with `--session`, calibrate (C), then press G. Follow the on-screen cues and tap on each beep: 40 single taps on named keys, 10 chords, then 20 s of moving your hand without tapping. Then run `python session_analyze.py recordings/session_<time>` for detection, right-key, crosstalk, chord and false-tap rates. Add the headline numbers to METRICS.md.
+
+**Tap calibration (T).** With the strap on, press T. Rest your hand still on the paper for 3 s, then tap each finger 5 times on the beeps. The app saves per-finger tap thresholds and finger crosstalk to `calibration/tap_profile.json` and loads it on every start. Redo it if you re-seat the strap. Run a guided session (G) before and after to see the difference.
 
 ## Tests
 

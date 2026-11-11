@@ -41,6 +41,7 @@ landmarker_lock = threading.Lock()
 last_timestamp_ms = 0
 
 CALIBRATION_DIR = BASE_DIR / "calibration"
+TAP_PROFILE = CALIBRATION_DIR / "tap_profile.json"
 SAMPLES_DIR = BASE_DIR / "samples"
 CALIBRATION_FRAMES = 15
 
@@ -430,6 +431,7 @@ if __name__ == "__main__":
     tap_log = None
     player = None
     session = None
+    tap_cal = None
     session_recorder = None
     session_events = None
     if args.tap or args.tap_demo:
@@ -437,7 +439,12 @@ if __name__ == "__main__":
         strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
         tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
         tap.start()
-        tap_log = TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        from tap_profile import load_profile, save_profile
+        profile = load_profile(TAP_PROFILE)
+        if profile is not None:
+            tap.set_profile(profile)
+            print(f"Tap profile loaded ({profile['created']}).")
+        tap_log =TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
         if not args.no_sound:
             try:
                 from sound import NotePlayer, key_note, tap_velocity
@@ -446,7 +453,8 @@ if __name__ == "__main__":
                 print(f"Sound off: {error}")
 
     guided = ", G = guided session" if args.session else ""
-    print(f"Waiting for {source}. C = calibrate, S = save frame{guided}, Q = quit.")
+    tap_keys = ", T = tap calibration" if tap is not None else ""
+    print(f"Waiting for {source}. C = calibrate, S = save frame{tap_keys}{guided}, Q = quit.")
 
     def end_session():
         """Stop and close a guided session's recorders, keeping its files."""
@@ -548,6 +556,28 @@ if __name__ == "__main__":
                 else:
                     cv2.putText(frame, text, (5, frame.shape[0] // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if tap_cal is not None:
+                text = tap_cal.update(time.time())
+                if text is None:
+                    tap.listeners.remove(tap_cal)
+                    try:
+                        profile = tap_cal.fit()
+                        CALIBRATION_DIR.mkdir(exist_ok=True)
+                        save_profile(profile, TAP_PROFILE)
+                        tap.set_profile(profile)
+                        msg = "Tap calibrated: " + "  ".join(
+                            f"{f[0]}:{profile['thresholds'][f]:.2f}" for f in profile["thresholds"])
+                        for w in profile["warnings"]:
+                            print("Tap calibration warning:", w)
+                    except ValueError as error:
+                        msg = f"Tap calibration failed: {error} Press T to retry."
+                    print(msg)
+                    with frame_lock:
+                        status_text = msg
+                    tap_cal = None
+                else:
+                    cv2.putText(frame, text, (5, frame.shape[0] // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.imshow("Phone Camera Feed", frame)
             if tap is not None:
                 cv2.imshow("Tap Strap", tap.render(fingers))
@@ -580,6 +610,11 @@ if __name__ == "__main__":
                     print(path)
                     with frame_lock:
                         status_text = f"Saved {path.name}"
+            elif key == ord("t") and tap is not None and tap_cal is None and session is None:
+                from m0_record import click
+                from tap_profile import TapCalibration
+                tap_cal = TapCalibration(time.time() + 3, beep=click)
+                tap.listeners.append(tap_cal)
             elif key == ord("g") and args.session and tap is not None and session is None:
                 with frame_lock:
                     n_keys = len(calibration["regions"]) if calibration is not None else 0
