@@ -50,6 +50,8 @@ calibrating = False
 calibration_frames = []
 latest_raw = None
 latest_fingers = {}
+latest_hand = None  # Strap-hand landmarks of the newest frame (for session logs).
+session_hands = None  # session.HandLog while a guided session runs.
 strap_label = None          # MediaPipe label of the strap hand; None = first hand.
 status_text = "Press C to calibrate."
 SETTINGS_WINDOW = "Calibration settings"
@@ -208,6 +210,15 @@ def camera_loop(index):
             time.sleep(0.05)
 
 
+def pick_hand(result, strap_label=None):
+    """Index of the strap hand in result.hand_landmarks, or None (same rule as hand_fingers)."""
+    for i in range(len(result.hand_landmarks)):
+        label = result.handedness[i][0].category_name if i < len(result.handedness) else None
+        if (strap_label is None and i == 0) or (strap_label is not None and label == strap_label):
+            return i
+    return None
+
+
 def hand_fingers(result, cal, strap_label=None):
     """Return (fingers of the chosen hand, regions under any fingertip).
 
@@ -227,7 +238,7 @@ def hand_fingers(result, cal, strap_label=None):
 def process_frame(frame):
     global latest_frame, last_timestamp_ms
     global calibration, checked_size, calibrating, calibration_frames
-    global latest_raw, latest_fingers, status_text
+    global latest_raw, latest_fingers, latest_hand, status_text
     global ink_ratio_setting, line_kernel_setting
 
     # Detect the paper.
@@ -292,9 +303,12 @@ def process_frame(frame):
     # Draw detected hand landmarks on top of the overlay.
     annotated = draw_hand_landmarks(annotated, result)
 
+    i = pick_hand(result, strap_label) if cal is not None else None
+    hand = result.hand_landmarks[i] if i is not None else None
     with frame_lock:
         latest_frame = annotated
         latest_fingers = fingers
+        latest_hand = hand
 
 
 def process_pending():
@@ -310,6 +324,12 @@ def process_pending():
 
     start = time.perf_counter()
     process_frame(frame)
+    hands = session_hands  # One read: the display thread may end the session meanwhile.
+    if hands is not None:
+        with frame_lock:
+            hand, fingers = latest_hand, dict(latest_fingers)
+        # Arrival time on the wall clock, the same clock the strap and cue files use.
+        hands.add(time.time() - (time.perf_counter() - arrived), hand, fingers)
     elapsed_ms = (time.perf_counter() - start) * 1000
     process_ms = 0.9 * process_ms + 0.1 * elapsed_ms
     age_ms = 0.9 * age_ms + 0.1 * (time.perf_counter() - arrived) * 1000
@@ -392,6 +412,8 @@ if __name__ == "__main__":
     parser.add_argument("--base-note", type=int, default=60, metavar="N",
                         help="MIDI note for paper key 1 (60 = middle C)")
     parser.add_argument("--no-sound", action="store_true", help="log taps without playing notes")
+    parser.add_argument("--session", action="store_true",
+                        help="enable G: a guided accuracy session (needs --tap or --tap-demo and a calibration)")
     args = parser.parse_args()
     if args.list_cameras:
         list_cameras()
@@ -407,6 +429,9 @@ if __name__ == "__main__":
     tap = None
     tap_log = None
     player = None
+    session = None
+    session_recorder = None
+    session_events = None
     if args.tap or args.tap_demo:
         # MediaPipe labels hands as if the image were mirrored; ours aren't, so swap.
         strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
@@ -420,7 +445,19 @@ if __name__ == "__main__":
             except Exception as error:  # No MIDI output or missing package: keep running silently.
                 print(f"Sound off: {error}")
 
-    print(f"Waiting for {source}. C = calibrate, S = save frame, Q = quit.")
+    guided = ", G = guided session" if args.session else ""
+    print(f"Waiting for {source}. C = calibrate, S = save frame{guided}, Q = quit.")
+
+    def end_session():
+        """Stop and close a guided session's recorders, keeping its files."""
+        global session, session_recorder, session_hands, session_events
+        # Unhook first: the strap thread calls listeners, so no late write hits a closed file.
+        if session_recorder in tap.listeners:
+            tap.listeners.remove(session_recorder)
+        for item in (session_recorder, session_hands, session_events, session):
+            if item is not None:
+                item.close()
+        session = session_recorder = session_hands = session_events = None
 
     cv2.namedWindow(SETTINGS_WINDOW)
     # Trackbars have no tooltips, so the window shows a short guide instead.
@@ -503,6 +540,14 @@ if __name__ == "__main__":
                     (5, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1,
                 )
+            if session is not None:
+                text = session.update(time.time())
+                if text is None:
+                    print(f"Session done. Score it: python session_analyze.py {prefix}")
+                    session = end_session()
+                else:
+                    cv2.putText(frame, text, (5, frame.shape[0] // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.imshow("Phone Camera Feed", frame)
             if tap is not None:
                 cv2.imshow("Tap Strap", tap.render(fingers))
@@ -510,6 +555,8 @@ if __name__ == "__main__":
                     # Strap names are lowercase; camera names are capitalised.
                     key = fingers.get(finger.capitalize())
                     tap_log.add(host_time, finger, key, peak)
+                    if session_events is not None:
+                        session_events.add(host_time, finger, key, peak)
                     if player is not None and key:
                         player.play(key_note(key, args.base_note), tap_velocity(peak))
                 if player is not None:
@@ -533,12 +580,32 @@ if __name__ == "__main__":
                     print(path)
                     with frame_lock:
                         status_text = f"Saved {path.name}"
+            elif key == ord("g") and args.session and tap is not None and session is None:
+                with frame_lock:
+                    n_keys = len(calibration["regions"]) if calibration is not None else 0
+                if n_keys == 0:
+                    with frame_lock:
+                        status_text = "Calibrate (C) before a guided session."
+                else:
+                    from m0_record import click
+                    from session import GuidedSession, HandLog, build_cues
+                    from stream_raw import Recorder
+                    prefix = BASE_DIR / "recordings" / f"session_{time.strftime('%Y%m%d_%H%M%S')}"
+                    prefix.parent.mkdir(exist_ok=True)
+                    session_recorder = Recorder(str(prefix))
+                    tap.listeners.append(session_recorder)
+                    session_hands = HandLog(f"{prefix}_hand.csv")
+                    session_events = TapLog(f"{prefix}_events.csv")
+                    session = GuidedSession(build_cues(n_keys), f"{prefix}_cues.csv", time.time() + 3, beep=click)
+                    print(f"Guided session: {prefix}")
     except KeyboardInterrupt:
         pass
     finally:
         # Don't call hand_landmarker.close(): it can block forever while the
         # worker thread is mid-detection, which froze the terminal on Ctrl+C.
         # Exiting the process frees the model, camera and windows anyway.
+        if session is not None:
+            end_session()  # A quit mid-session keeps its files.
         if player is not None:
             player.close()
         if tap_log is not None:

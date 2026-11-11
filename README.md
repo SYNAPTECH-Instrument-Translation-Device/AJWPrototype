@@ -183,6 +183,8 @@ Taps on a key play a note through the computer's MIDI synth (on Windows, the bui
 
 To try the full pipeline without a strap: calibrate a paper keyboard (C), then run with `--tap-demo` and hold your hand over the keys. The demo strap taps each finger about once a second.
 
+**Measuring accuracy.** Run with `--session`, calibrate (C), then press G. Follow the on-screen cues and tap on each beep: 40 single taps on named keys, 10 chords, then 20 s of moving your hand without tapping. Then run `python session_analyze.py recordings/session_<time>` for detection, right-key, crosstalk, chord and false-tap rates. Add the headline numbers to METRICS.md.
+
 ## Tests
 
 Run the unit tests from the repo root:
