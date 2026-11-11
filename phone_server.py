@@ -444,7 +444,7 @@ if __name__ == "__main__":
         if profile is not None:
             tap.set_profile(profile)
             print(f"Tap profile loaded ({profile['created']}).")
-        tap_log =TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        tap_log = TapLog(BASE_DIR / "recordings" / f"taps_{time.strftime('%Y%m%d_%H%M%S')}.csv")
         if not args.no_sound:
             try:
                 from sound import NotePlayer, key_note, tap_velocity
@@ -615,7 +615,7 @@ if __name__ == "__main__":
                 from tap_profile import TapCalibration
                 tap_cal = TapCalibration(time.time() + 3, beep=click)
                 tap.listeners.append(tap_cal)
-            elif key == ord("g") and args.session and tap is not None and session is None:
+            elif key == ord("g") and args.session and tap is not None and session is None and tap_cal is None:
                 with frame_lock:
                     n_keys = len(calibration["regions"]) if calibration is not None else 0
                 if n_keys == 0:
