@@ -80,6 +80,15 @@ class TapViewTests(unittest.TestCase):
         tap.on_sample(sample(-2.5), 0.30)
         self.assertEqual(len(tap.pop_events()), 2)
 
+    def test_profile_sets_per_finger_threshold(self):
+        tap = TapMonitor(demo=True)
+        tap.on_sample(sample(-1.3), 10.0)
+        self.assertEqual(tap.pop_events(), [])  # 0.3 g is under the default 0.5 g
+        tap.set_profile({"thresholds": {"thumb": 0.5, "index": 0.2, "middle": 0.5, "ring": 0.5, "pinky": 0.5}})
+        tap.on_sample(sample(-1.0), 11.0)
+        tap.on_sample(sample(-1.3), 12.0)
+        self.assertEqual(len(tap.pop_events()), 1)
+
     def test_rest_noise_no_event(self):
         tap = TapMonitor(demo=True)
         for i in range(100):

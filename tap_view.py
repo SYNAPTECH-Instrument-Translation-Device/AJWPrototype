@@ -63,6 +63,7 @@ class TapMonitor:
         self.last_rate_time = self.last_render = time.monotonic()
         self.above = {f: False for f in FINGERS}   # Was the last sample over TAP_G?
         self.last_tap = {f: -1e9 for f in FINGERS}
+        self.thresholds = {f: TAP_G for f in FINGERS}  # Replaced by a fitted tap profile.
         self.events = collections.deque(maxlen=64)  # (host_time_s, finger, peak_g)
         self.listeners = []  # Extra (sample, host_time) callbacks, e.g. a session recorder.
 
@@ -104,15 +105,20 @@ class TapMonitor:
                 for f, m in zip(FINGERS, sample.magnitudes()):
                     dev = abs(m - 1.0)
                     self.activity[f] = max(self.activity[f], dev)
-                    if dev > TAP_G and not self.above[f] and host_time - self.last_tap[f] >= REFRACTORY_S:
+                    thr = self.thresholds[f]
+                    if dev > thr and not self.above[f] and host_time - self.last_tap[f] >= REFRACTORY_S:
                         # shortcut: peak is the deviation at the crossing sample, not the true peak; fine for v1 loudness.
                         self.events.append((host_time, f, dev))
                         self.last_tap[f] = host_time
-                    self.above[f] = dev > TAP_G
+                    self.above[f] = dev > thr
             else:
                 self.gyro = sample.gyro_dps
         for listener in self.listeners:
             listener(sample, host_time)
+
+    def set_profile(self, profile):
+        with self.lock:
+            self.thresholds = {f: float(profile["thresholds"][f]) for f in FINGERS}
 
     def pop_events(self):
         """Taps since the last call, oldest first: [(host_time_s, finger, peak_g)]."""
@@ -138,6 +144,7 @@ class TapMonitor:
                 self.rate = self.count / (now - self.last_rate_time)
                 self.count, self.last_rate_time = 0, now
             activity = dict(self.activity)
+            thresholds = dict(self.thresholds)
             decay = 0.5 ** ((now - self.last_render) / HALF_LIFE_S)
             self.last_render = now
             for f in FINGERS:
@@ -154,7 +161,7 @@ class TapMonitor:
             cv2.putText(img, f, (10, y + 15), font, 0.5, white, 1)
             cv2.rectangle(img, (bar_x, y), (bar_x + bar_w, y + 20), (70, 70, 70), 1)
             fill = int(bar_w * min(1.0, a / FULL_SCALE_G))
-            color = (0, 0, 255) if a > TAP_G else (0, 200, 0)
+            color = (0, 0, 255) if a > thresholds[f] else (0, 200, 0)
             if fill:
                 cv2.rectangle(img, (bar_x, y), (bar_x + fill, y + 20), color, -1)
             region = finger_regions.get(f)
