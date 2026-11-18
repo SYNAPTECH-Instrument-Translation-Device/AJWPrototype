@@ -79,7 +79,7 @@ Keep both the Python server and ngrok running while using the camera.
 | `S` | Save the current camera frame to `samples/` (for debugging calibration). | Always |
 | `T` | Tap calibration: rest your hand 3 s, then tap each finger 5 times on the beeps. Saves `calibration/tap_profile.json`. | With `--tap` or `--tap-demo` |
 | `G` | Guided accuracy session: tap the named finger/key on each beep. Saves `recordings/session_<time>_*.csv`. | With `--session` and a strap, after `C` |
-| `Q` | Quit. Puts the strap back into normal typing mode. `Ctrl+C` in the terminal also works. | Always |
+| `Q` | Quit. Puts the strap back into normal typing mode and disconnects; wait for the confirmation line (see Closing the strap safely). `Ctrl+C` once in the terminal also works. | Always |
 
 ### Windows
 
@@ -212,6 +212,13 @@ python phone_server.py --camera 1 --tap-demo   # synthetic strap data
 ```
 
 A **Tap Strap** window opens next to the camera feed. Each finger has a live accelerometer bar (red = tap-sized spike) and, on the right, the key the camera sees that fingertip on. If the strap can't connect, the window says so and the camera keeps running. Q puts the strap back into normal typing mode.
+
+**Closing the strap safely.** Every script closes the strap the same way (`tapstrap.close_tap`): stop the 10 s mode refresh, write Text mode, wait 0.5 s for the firmware to apply it, then disconnect. Skipping the disconnect leaves Windows holding a stale Bluetooth session that the next connect collides with. To quit:
+
+1. Press Q (or Ctrl+C **once**). Don't close the terminal window or press Ctrl+C repeatedly: that kills the process mid-close.
+2. Wait for `Tap Strap back in typing mode and disconnected.`
+3. Only then switch the strap off or start another run. Run one strap program at a time.
+4. If it prints a WARNING instead, switch the strap off and on (or toggle Windows Bluetooth) before reconnecting.
 
 `--tap-hand left|right` (default `right`) says which hand wears the strap, so the key column follows that hand. Keys under both hands are highlighted. If the column follows your other hand, switch the value: hand labels assume an unmirrored camera image, which hasn't been checked with every camera yet.
 

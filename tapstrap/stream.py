@@ -22,6 +22,42 @@ log = logging.getLogger(__name__)
 
 SampleCallback = Callable[[Sample, float], None]  # (sample, host_time_s)
 
+# Firmware drains mode commands in a low-priority task that lags under raw-data
+# load; give it time to apply Text mode before the link drops.
+TEXT_MODE_SETTLE_S = 0.5
+
+
+async def close_tap(sdk, write_timeout: float = 3.0, disconnect_timeout: float = 3.0) -> bool:
+    """Shut a TapSDK connection down in the order Tap's docs ask for.
+
+    1. Stop the 10 s mode refresh, so it can't re-send raw/controller mode.
+    2. Write Text mode (the documented "exit controller mode" packet 03 0C 00 00).
+    3. Wait for the firmware to apply it.
+    4. Disconnect, so Windows doesn't keep an orphaned GATT session alive.
+
+    Every step runs even if an earlier one fails, and each is time-limited.
+    Returns True if the strap confirmed Text mode.
+    """
+    from tapsdk import InputModeText
+
+    restored = False
+    try:
+        await sdk.input_mode_refresh.stop()
+    except Exception as e:
+        log.warning("Could not stop mode refresh: %s", e)
+    try:
+        sdk.input_mode = InputModeText()  # If a refresh still fires, it sends Text.
+        await asyncio.wait_for(sdk._write_input_mode(InputModeText().get_command()), write_timeout)
+        await asyncio.sleep(TEXT_MODE_SETTLE_S)
+        restored = True
+    except Exception as e:
+        log.warning("Could not put the strap back in Text mode: %r", e)
+    try:
+        await asyncio.wait_for(sdk.client.disconnect(), disconnect_timeout)
+    except Exception as e:
+        log.warning("Disconnect failed: %r", e)
+    return restored
+
 
 class TapRawStream:
     """Async context manager yielding decoded raw samples from a Tap Strap."""
@@ -49,14 +85,25 @@ class TapRawStream:
         await self.stop()
 
     async def start(self) -> None:
-        from tapsdk import TapSDK, InputModeRaw
-        from tapsdk.enumerations import FingerAcclSensitivity, ImuAcclSensitivity, ImuGyroSensitivity
+        from tapsdk import TapSDK
 
         self._loop = asyncio.get_running_loop()
         self._sdk = TapSDK(address=self.address)
         # Take over the raw-data notification handler so we get the bytes
         # ourselves (start() binds self.on_raw_data when it subscribes).
         self._sdk.on_raw_data = self._handle_notification
+
+        try:
+            await self._connect()
+        except BaseException:
+            # `async with` skips __aexit__ when __aenter__ fails; don't leave
+            # a half-open link (or the strap in raw mode) behind.
+            await self.stop()
+            raise
+
+    async def _connect(self) -> None:
+        from tapsdk import InputModeRaw
+        from tapsdk.enumerations import FingerAcclSensitivity, ImuAcclSensitivity, ImuGyroSensitivity
 
         log.info("Connecting to Tap (make sure it's paired and awake)...")
         await self._sdk.run()
@@ -76,22 +123,14 @@ class TapRawStream:
         log.info("Raw sensor mode on: fingers ±%dg, gyro ±%ddps, thumb accel ±%dg",
                  self.config.finger_accel_g, self.config.imu_gyro_dps, self.config.imu_accel_g)
 
-    async def stop(self) -> None:
+    async def stop(self) -> bool:
+        """Return the strap to Text mode and disconnect. True if Text mode was confirmed."""
         if self._sdk is None:
-            return
-        from tapsdk import InputModeText
+            return True
         sdk, self._sdk = self._sdk, None
-        try:
-            await sdk.input_mode_refresh.stop()
-            # Put the strap back to normal typing mode before leaving.
-            await sdk._write_input_mode(InputModeText().get_command())
-        except Exception as e:
-            log.debug("Could not restore text mode: %s", e)
-        try:
-            await sdk.client.disconnect()
-        except Exception as e:
-            log.debug("Disconnect error: %s", e)
-        log.info("Disconnected.")
+        ok = await close_tap(sdk)
+        log.info("Disconnected%s.", "" if ok else " (Text mode NOT confirmed)")
+        return ok
 
     # -- data path ---------------------------------------------------------
     def _handle_notification(self, _char, data: bytearray) -> None:

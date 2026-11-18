@@ -647,7 +647,13 @@ if __name__ == "__main__":
             print(tap_log.summary())
             tap_log.close()
         if tap is not None:
-            tap.stop()  # Puts the strap back in normal typing mode.
+            # Close the strap BEFORE the hard kill below: Text mode, then disconnect.
+            print("Closing Tap Strap...")
+            if tap.stop():
+                print("Tap Strap back in typing mode and disconnected.")
+            elif not args.tap_demo:
+                print("WARNING: Tap Strap did not close cleanly. Before reconnecting, "
+                      "switch it off and on (or toggle Bluetooth) to clear the stale link.")
         cv2.destroyAllWindows()
         if os.name == "nt":
             # os._exit still runs DLL cleanup, which can deadlock with Camo's

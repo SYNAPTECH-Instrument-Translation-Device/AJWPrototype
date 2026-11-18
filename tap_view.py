@@ -55,6 +55,7 @@ class TapMonitor:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = None
+        self.closed_cleanly = False
         self.status = "Tap: connecting..."
         self.activity = {f: 0.0 for f in FINGERS}
         self.gyro = (0.0, 0.0, 0.0)
@@ -71,11 +72,17 @@ class TapMonitor:
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
         self.thread.start()
 
-    def stop(self, timeout=5.0):
+    def stop(self, timeout=10.0):
+        """Close the strap; True once it's back in Text mode and disconnected.
+
+        Callers that kill the process afterwards must wait for this: killing
+        mid-close leaves the strap in raw mode and Windows holding the link.
+        """
         self.stop_event.set()
-        if self.thread is not None:
-            # Restoring typing mode is a Bluetooth write; the caller kills the process right after.
-            self.thread.join(timeout)
+        if self.thread is None:
+            return True
+        self.thread.join(timeout)
+        return not self.thread.is_alive() and self.closed_cleanly
 
     async def _run(self):
         stream = (DemoStream if self.demo else TapRawStream)(SensorConfig(), address=self.address)
@@ -92,7 +99,7 @@ class TapMonitor:
         finally:
             try:
                 # Also after a half-finished connect, so the link isn't left open.
-                await stream.stop()
+                self.closed_cleanly = self.demo or await stream.stop()
             except Exception:
                 pass  # DemoStream.stop fails if start never ran; nothing to clean up.
 

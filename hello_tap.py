@@ -1,6 +1,8 @@
 import asyncio
 from tapsdk import InputModeController, connect
 
+from tapstrap import close_tap
+
 
 def on_tap(identifier, tapcode):
     code = tapcode[0] if isinstance(tapcode, (list, tuple)) else tapcode
@@ -19,10 +21,15 @@ async def main():
     sdk.register_connection_events(on_connect)
     sdk.register_tap_events(on_tap)
 
-    await sdk.start()
-    await sdk.set_input_mode(InputModeController())
+    try:
+        await sdk.start()
+        await sdk.set_input_mode(InputModeController())
+        await asyncio.Event().wait()
+    finally:
+        await close_tap(sdk)  # Text mode, then disconnect.
 
-    await asyncio.Event().wait()
 
-
-asyncio.run(main())
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    pass

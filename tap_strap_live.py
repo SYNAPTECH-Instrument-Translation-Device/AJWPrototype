@@ -29,10 +29,10 @@ import time
 
 from tapsdk import (
     InputModeRaw,
-    InputModeText,
     TapSDK,
     connect,
 )
+from tapstrap import close_tap
 from tapsdk.enumerations import (
     FingerAcclSensitivity,
     ImuAcclSensitivity,
@@ -143,14 +143,15 @@ async def main():
         )
 
     sdk.register_raw_data_events(on_raw_data)   # register callbacks first...
-    await sdk.start()                           # ...then arm notifications
-    await sdk.set_input_mode(RAW_MODE)
-
     try:
+        await sdk.start()                       # ...then arm notifications
+        await sdk.set_input_mode(RAW_MODE)
         await display_loop()
     finally:
-        await sdk.set_input_mode(InputModeText())   # back to normal typing
-        print("\nStopped. Strap returned to normal mode.")
+        # Stop refresh -> Text mode -> disconnect (see tapstrap.close_tap).
+        ok = await close_tap(sdk)
+        print("\nStopped. " + ("Strap returned to normal mode." if ok else
+                               "WARNING: Text mode not confirmed; power-cycle the strap."))
 
 
 if __name__ == "__main__":
