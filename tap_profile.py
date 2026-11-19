@@ -1,8 +1,9 @@
-"""Per-user tap profile: per-finger thresholds and crosstalk, fitted from a short calibration.
+"""Per-user tap profile: per-finger thresholds, fitted from a short calibration.
 
 Calibration = REST_S of a still hand, then TAPS_PER_FINGER cued taps per finger.
 """
 import json
+import threading
 import time
 
 import numpy as np
@@ -38,7 +39,9 @@ def window_peaks(times, devs, t0, t1):
 def fit_profile(times, devs, sched):
     """times (N,), devs (N, 5) = |accel| - 1 g per finger; sched from schedule().
 
-    Returns {"thresholds", "noise", "crosstalk", "weakest_tap", "warnings", "created"}.
+    Returns {"thresholds", "noise", "weakest_tap", "warnings", "created"}.
+    weakest_tap is the weakest tap the threshold is based on, after ignoring one outlier.
+    Raises ValueError when a finger has no tap above rest noise.
     """
     times, devs = np.asarray(times, float), np.asarray(devs, float)
     rest0 = next(t for t, k, _ in sched if k == "rest_start")
@@ -53,20 +56,19 @@ def fit_profile(times, devs, sched):
         if kind == "tap":
             peaks[f].append(window_peaks(times, devs, t + WINDOW[0], t + WINDOW[1]))
 
-    thresholds, weakest, crosstalk, warnings = {}, {}, {}, []
+    thresholds, weakest, warnings = {}, {}, []
     for i, f in enumerate(FINGERS):
         own = np.array([p[i] for p in peaks[f]]) if peaks[f] else np.zeros(1)
-        weakest[f] = float(own.min())
-        thr = max((noise[i] + weakest[f]) / 2, noise[i] + MIN_MARGIN_G)
-        if weakest[f] <= noise[i] + MIN_MARGIN_G:
-            warnings.append(f"{f}: weakest tap ({weakest[f]:.2f} g) is not above rest noise ({noise[i]:.2f} g)")
-        thresholds[f] = float(thr)
-        crosstalk[f] = {
-            g: float(np.median([p[j] / max(p[i], 1e-6) for p in peaks[f]])) if peaks[f] else 0.0
-            for j, g in enumerate(FINGERS) if g != f
-        }
+        rising = np.sort(own[own > noise[i] + MIN_MARGIN_G])
+        if len(rising) == 0:
+            raise ValueError(f"no {f} tap rose above rest noise ({noise[i]:.2f} g)")
+        if len(rising) < len(own):
+            warnings.append(f"{f}: ignored {len(own) - len(rising)} of {len(own)} taps not above rest noise")
+        # Ignore one outlier: a missed cue is already dropped above, else skip the weakest tap.
+        weakest[f] = float(rising[1] if len(rising) == len(own) >= 3 else rising[0])
+        thresholds[f] = float(max((noise[i] + weakest[f]) / 2, noise[i] + MIN_MARGIN_G))
     return {"thresholds": thresholds, "noise": {f: float(noise[i]) for i, f in enumerate(FINGERS)},
-            "weakest_tap": weakest, "crosstalk": crosstalk, "warnings": warnings,
+            "weakest_tap": weakest, "warnings": warnings,
             "created": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 
@@ -90,12 +92,15 @@ class TapCalibration:
     def __init__(self, start, beep=None):
         self.sched, self.beep = schedule(start), beep
         self.times, self.devs = [], []
+        self.lock = threading.Lock()  # __call__ runs on the Bluetooth thread.
         self.next = 0
 
     def __call__(self, sample, host_time):
         if hasattr(sample, "magnitudes"):  # FingerAccelSample only
-            self.times.append(host_time)
-            self.devs.append([abs(m - 1.0) for m in sample.magnitudes()])
+            dev = [abs(m - 1.0) for m in sample.magnitudes()]
+            with self.lock:
+                self.times.append(host_time)
+                self.devs.append(dev)
 
     def update(self, now):
         """Return the text to show, or None when every cue is past and the last window has closed."""
@@ -113,4 +118,6 @@ class TapCalibration:
         return f"Tap with {f.upper()} on each beep (next in {t - now:.1f} s)"
 
     def fit(self):
-        return fit_profile(self.times, self.devs, self.sched)
+        with self.lock:
+            times, devs = list(self.times), list(self.devs)
+        return fit_profile(times, devs, self.sched)

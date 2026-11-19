@@ -1,6 +1,7 @@
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,6 +32,26 @@ class SoundTest(unittest.TestCase):
         self.assertEqual(tap_velocity(3.0), 127)
         self.assertEqual(tap_velocity(10), 127)
         self.assertEqual(tap_velocity(0), 40)
+
+    def test_tap_velocity_relative_to_threshold(self):
+        self.assertEqual(tap_velocity(0.2, low=0.2), 40)  # Just over a low calibrated threshold.
+        self.assertGreater(tap_velocity(0.6, low=0.2), 70)
+        self.assertLess(tap_velocity(0.6, low=0.2), tap_velocity(1.5, low=0.2))
+        self.assertEqual(tap_velocity(4.0, low=4.0), 40)  # Threshold above `high` doesn't divide by zero.
+        self.assertLess(tap_velocity(5.0, low=4.0), 127)
+
+    def test_retap_is_not_cut_short_by_earlier_off(self):
+        port = FakePort()
+        player = NotePlayer(port=port)
+        with mock.patch("sound.time.monotonic", side_effect=[100.0, 100.1]):
+            player.play(60, 100)
+            first_off = player.off_at[0][0]
+            player.play(60, 90)
+        self.assertEqual([m.type for m in port.sent[1:]], ["note_on", "note_off", "note_on"])
+        player.update(now=first_off)  # The first note's off time: the second keeps sounding.
+        self.assertEqual(port.sent[-1].type, "note_on")
+        player.update(now=first_off + 1)
+        self.assertEqual(port.sent[-1].type, "note_off")
 
     def test_program_change_first(self):
         port = FakePort()

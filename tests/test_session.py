@@ -66,7 +66,7 @@ class TestHandLog(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "hand.csv"
             log = HandLog(path)
-            log.add(1.0, fake_hand(), {"Index": 4})
+            log.add(1.0, fake_hand(), {"index": 4})
             log.add(2.0, None, {})
             log.close()
             with open(path, newline="") as f:
@@ -109,7 +109,7 @@ class TestAnalyze(unittest.TestCase):
     def test_lag_sweep(self):
         log = HandLog(f"{self.prefix}_hand.csv")
         for t in (9.9, 9.95, 10.05, 10.08):
-            log.add(t, fake_hand(), {"Index": 2 if t < 10.05 else 3})
+            log.add(t, fake_hand(), {"index": 2 if t < 10.05 else 3})
         log.close()
         report = analyze(self.prefix)
         self.assertIn("lag 0 ms key acc: 1/1 (100%)", report)

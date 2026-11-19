@@ -14,6 +14,11 @@ let timer = null;
 let inFlight = 0;
 const MAX_IN_FLIGHT = 4;
 let running = false;
+// The server prints the page link with ?token=...; every frame must carry it.
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+// Parallel POSTs can arrive out of order; the server drops ones older than the newest.
+const SESSION_ID = Math.random().toString(36).slice(2);
+let frameSeq = 0;
 
 let successfulFrames = 0;
 let lastFpsUpdate = performance.now();
@@ -70,6 +75,7 @@ async function sendFrame() {
     }
 
     inFlight++;
+    const seq = frameSeq++;
 
     try {
         // Follow phone rotation: the video swaps width and height.
@@ -100,11 +106,16 @@ async function sendFrame() {
         const response = await fetch("/frame", {
             method: "POST",
             headers: {
-                "Content-Type": "application/octet-stream"
+                "Content-Type": "application/octet-stream",
+                "X-Frame-Token": TOKEN,
+                "X-Frame-Seq": `${SESSION_ID} ${seq}`
             },
             body: blob
         });
 
+        if (response.status === 403) {
+            throw new Error("wrong or missing token: open the link the server printed");
+        }
         if (!response.ok) {
             throw new Error("Server returned " + response.status);
         }

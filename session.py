@@ -1,7 +1,7 @@
 """Guided accuracy session: on-screen cues, a beep to tap on, and everything recorded.
 
 Files, all on the host time.time() clock:
-    PREFIX_fingers.csv / PREFIX_imu.csv   raw strap (stream_raw.Recorder)
+    PREFIX_fingers.csv / PREFIX_imu.csv   raw strap (recording.Recorder)
     PREFIX_hand.csv    host_time_s, then per finger (thumb..pinky): tip_x, tip_y, tip_z, dip_x, dip_y, key
     PREFIX_cues.csv    host_time_s, kind, fingers, keys   kind: tap | chord | idle_start | idle_end
     PREFIX_events.csv  the app's detected taps (tap_view.TapLog format)
@@ -10,11 +10,11 @@ import csv
 import random
 import threading
 
+from calibration import FINGERTIPS
 from tapstrap import FINGERS
 
 CHORDS = [("index", "middle"), ("index", "ring"), ("thumb", "index"),
           ("middle", "ring"), ("index", "middle", "ring")]
-TIPS = {"thumb": 4, "index": 8, "middle": 12, "ring": 16, "pinky": 20}  # MediaPipe landmark ids
 LEAD_S = 1.5    # The cue text shows this long before the beep.
 PERIOD_S = 3.0  # Beep to beep.
 IDLE_S = 20.0   # Final block: move the hand around without tapping (false-tap rate).
@@ -51,14 +51,14 @@ class HandLog:
         self.writer.writerow(cols)
 
     def add(self, host_time, hand, fingers):
-        """hand: 21 landmarks (x, y, z attributes) or None; fingers: {"Index": key or None, ...}."""
+        """hand: 21 landmarks (x, y, z attributes) or None; fingers: {"index": key or None, ...}."""
         if hand is None:
             return
         row = [f"{host_time:.4f}"]
         for f in FINGERS:
-            tip, dip = hand[TIPS[f]], hand[TIPS[f] - 1]
+            tip, dip = hand[FINGERTIPS[f]], hand[FINGERTIPS[f] - 1]
             row += [f"{tip.x:.4f}", f"{tip.y:.4f}", f"{tip.z:.4f}", f"{dip.x:.4f}", f"{dip.y:.4f}",
-                    fingers.get(f.capitalize()) or 0]
+                    fingers.get(f) or 0]
         with self.lock:
             if not self.file.closed:
                 self.writer.writerow(row)

@@ -99,5 +99,21 @@ class M0Tests(unittest.TestCase):
                 self.assertIn(k, kinds)
 
 
+
+class RecorderTests(unittest.TestCase):
+    def test_rows_reach_disk_before_close_and_late_writes_are_ignored(self):
+        from recording import Recorder
+        from tapstrap import FingerAccelSample
+        rest = (0.0, 0.0, -1.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = str(Path(tmp) / "r")
+            rec = Recorder(prefix)
+            rec(FingerAccelSample(5, rest, rest, rest, rest, rest), 1.0)
+            with open(f"{prefix}_fingers.csv", newline="") as fh:
+                self.assertEqual(len(list(csv.reader(fh))), 2)  # Flushed without close().
+            rec.close()
+            rec(FingerAccelSample(10, rest, rest, rest, rest, rest), 2.0)  # No "I/O on closed file".
+
+
 if __name__ == "__main__":
     unittest.main()

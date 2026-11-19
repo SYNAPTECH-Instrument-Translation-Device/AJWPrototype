@@ -50,5 +50,75 @@ class DecodeTests(unittest.TestCase):
             SensorConfig(finger_accel_g=3)
 
 
+
+class StreamTests(unittest.TestCase):
+    def test_full_queue_keeps_newest(self):
+        from tapstrap.stream import TapRawStream
+        stream = TapRawStream(queue_size=2)
+        for t in (1.0, 2.0, 3.0):
+            stream._emit("s", t)
+        self.assertEqual([stream._queue.get_nowait()[1] for _ in range(2)], [2.0, 3.0])
+        self.assertEqual(stream.dropped, 1)
+
+    def test_second_stop_reports_first_close(self):
+        import asyncio
+        from unittest import mock
+        from tapstrap import stream as stream_mod
+        s = stream_mod.TapRawStream()
+        s._sdk = object()
+
+        async def failed_close(sdk):
+            return False
+
+        async def run():
+            with mock.patch.object(stream_mod, "close_tap", failed_close):
+                return await s.stop(), await s.stop()
+
+        self.assertEqual(asyncio.run(run()), (False, False))
+        self.assertTrue(asyncio.run(stream_mod.DemoStream().stop()))  # Never started: nothing to close.
+
+
+class FakeSdk:
+    """Records the SIGINT handler seen at each close step."""
+
+    def __init__(self):
+        import types
+        self.seen = []
+        self.input_mode_refresh = types.SimpleNamespace(stop=self._step)
+        self.client = types.SimpleNamespace(disconnect=self._step)
+
+    async def _step(self, *args):
+        import signal
+        self.seen.append(signal.getsignal(signal.SIGINT))
+
+    _write_input_mode = _step
+
+
+class CloseTapTests(unittest.TestCase):
+    def close(self, sdk):
+        import asyncio
+        from unittest import mock
+        import tapstrap.stream as stream_mod
+        with mock.patch.object(stream_mod, "TEXT_MODE_SETTLE_S", 0):
+            return asyncio.run(stream_mod.close_tap(sdk))
+
+    def test_ctrl_c_ignored_during_close_then_restored(self):
+        import signal
+        before = signal.getsignal(signal.SIGINT)
+        sdk = FakeSdk()
+        self.assertTrue(self.close(sdk))
+        self.assertEqual(sdk.seen, [signal.SIG_IGN] * 3)  # Refresh stop, Text write, disconnect.
+        self.assertIs(signal.getsignal(signal.SIGINT), before)
+
+    def test_close_from_background_thread(self):
+        import threading
+        sdk, result = FakeSdk(), []
+        t = threading.Thread(target=lambda: result.append(self.close(sdk)))
+        t.start()
+        t.join()
+        self.assertEqual(result, [True])  # signal.signal would raise off the main thread.
+        self.assertEqual(len(sdk.seen), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

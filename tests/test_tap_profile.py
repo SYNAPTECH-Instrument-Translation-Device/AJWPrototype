@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import types
@@ -15,13 +16,17 @@ from tapstrap import FINGERS
 START, HZ = 100.0, 200
 
 
-def synth(skip=None):
+def synth(skip=None, miss_first=False):
     sched = schedule(START)
     rng = np.random.default_rng(0)
     times = np.arange(START - 1, sched[-1][0] + 2, 1 / HZ)
     devs = np.abs(rng.normal(0, 0.02, (len(times), 5)))
+    seen = set()
     for t, kind, f in sched:
         if kind != "tap" or f == skip:
+            continue
+        if miss_first and f not in seen:
+            seen.add(f)
             continue
         i = FINGERS.index(f)
         peak = 0.6 if f == "pinky" else 1.0
@@ -45,13 +50,20 @@ class TapProfileTests(unittest.TestCase):
             self.assertGreaterEqual(p["thresholds"][f], p["noise"][f] + 0.05)
             self.assertLess(p["thresholds"][f], p["weakest_tap"][f])
         self.assertLess(p["thresholds"]["pinky"], p["thresholds"]["index"])
-        self.assertAlmostEqual(p["crosstalk"]["index"]["middle"], 0.3, delta=0.05)
-        self.assertLess(p["crosstalk"]["index"]["ring"], 0.1)
+        self.assertNotIn("crosstalk", p)
         self.assertEqual(p["warnings"], [])
 
-    def test_missing_finger_warns(self):
-        p = fit_profile(*synth(skip="ring"))
-        self.assertTrue(any("ring" in w for w in p["warnings"]))
+    def test_one_missed_tap_per_finger(self):
+        p = fit_profile(*synth(miss_first=True))
+        for f in FINGERS:
+            peak = 0.6 if f == "pinky" else 1.0
+            self.assertGreater(p["thresholds"][f], p["noise"][f] + 0.2)
+            self.assertLess(p["thresholds"][f], peak)
+        self.assertEqual(len(p["warnings"]), 5)
+
+    def test_missing_finger_raises(self):
+        with self.assertRaisesRegex(ValueError, "ring"):
+            fit_profile(*synth(skip="ring"))
 
     def test_save_load(self):
         with tempfile.TemporaryDirectory() as d:
@@ -60,6 +72,8 @@ class TapProfileTests(unittest.TestCase):
             p = fit_profile(*synth())
             save_profile(p, path)
             self.assertEqual(load_profile(path), p)
+            path.write_text(json.dumps({**p, "crosstalk": {}}))  # Older profiles saved crosstalk.
+            self.assertEqual(load_profile(path)["thresholds"], p["thresholds"])
             path.write_text('{"thresholds": {"thumb": 0.5}}')
             self.assertIsNone(load_profile(path))
 

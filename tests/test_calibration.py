@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -10,9 +11,11 @@ import numpy as np
 
 from calibration import (
     build_calibration,
+    fingertip,
     INK_RATIO,
     LINE_KERNEL,
     load_calibration,
+    order_corners,
     rebuild_calibration,
     region_at,
     save_calibration,
@@ -144,6 +147,13 @@ class CalibrationTests(unittest.TestCase):
         cal = build_calibration([make_sheet(solid, TILTED)[0]])
         self.assertEqual(len(cal["regions"]), 4)
 
+    def test_order_corners_45_degrees(self):
+        pts = np.float32([[300, 500], [99, 301], [300, 100], [501, 299]])
+        out = order_corners(pts)
+        self.assertEqual(len({tuple(p) for p in out}), 4)
+        self.assertEqual(out.tolist(), [[300, 100], [501, 299], [300, 500], [99, 301]])
+        self.assertEqual(order_corners(STRAIGHT[[2, 0, 3, 1]]).tolist(), STRAIGHT.tolist())
+
     def test_region_lookup(self):
         img, M = make_sheet(solid, STRAIGHT)
         cal = build_calibration([img])
@@ -226,6 +236,23 @@ class CalibrationTests(unittest.TestCase):
     def test_landscape_stays_landscape(self):
         cal = build_calibration([make_sheet(solid, STRAIGHT)[0]])
         self.assertEqual(cal["flat_map"].shape, (850, 1100))
+
+
+def finger(*points):
+    return [types.SimpleNamespace(x=x, y=y) for x, y in points]
+
+
+class FingertipTests(unittest.TestCase):
+    def test_forward_tip_unchanged(self):
+        hand = [None] * 5 + finger((0.1, 0.5), (0.2, 0.5), (0.3, 0.5), (0.4, 0.5))
+        self.assertEqual(fingertip(hand, 8), (0.4, 0.5))
+
+    def test_folded_tip_unfolded_ahead_of_knuckle(self):
+        # Knuckles point +x; MediaPipe curled the end back to x=0.1.
+        hand = [None] * 5 + finger((0.0, 0.5), (0.2, 0.5), (0.2, 0.6), (0.1, 0.6))
+        x, y = fingertip(hand, 8)
+        self.assertAlmostEqual(x, 0.2 + 0.1 + 0.1)
+        self.assertAlmostEqual(y, 0.5)
 
 
 if __name__ == "__main__":

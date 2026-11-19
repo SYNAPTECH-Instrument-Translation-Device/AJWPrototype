@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import signal
+import threading
 import time
 from typing import AsyncIterator, Callable, List, Optional
 
@@ -38,6 +40,18 @@ async def close_tap(sdk, write_timeout: float = 3.0, disconnect_timeout: float =
     Every step runs even if an earlier one fails, and each is time-limited.
     Returns True if the strap confirmed Text mode.
     """
+    # A second Ctrl+C mid-close would abort it, leaving the strap in raw mode and
+    # Windows holding the link. Signal handlers can only change on the main thread.
+    on_main = threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN) if on_main else None
+    try:
+        return await _close_steps(sdk, write_timeout, disconnect_timeout)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+
+
+async def _close_steps(sdk, write_timeout, disconnect_timeout) -> bool:
     from tapsdk import InputModeText
 
     restored = False
@@ -47,6 +61,8 @@ async def close_tap(sdk, write_timeout: float = 3.0, disconnect_timeout: float =
         log.warning("Could not stop mode refresh: %s", e)
     try:
         sdk.input_mode = InputModeText()  # If a refresh still fires, it sends Text.
+        # _write_input_mode is private tapsdk API: only safe because requirements.txt pins the
+        # SDK commit. Re-check it whenever that pin changes.
         await asyncio.wait_for(sdk._write_input_mode(InputModeText().get_command()), write_timeout)
         await asyncio.sleep(TEXT_MODE_SETTLE_S)
         restored = True
@@ -71,6 +87,7 @@ class TapRawStream:
         self._callbacks: List[SampleCallback] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.dropped = 0
+        self._closed_ok = True  # Result of the last close; nothing open yet counts as clean.
 
     def on_sample(self, cb: SampleCallback) -> None:
         """Register a callback fired for every sample (runs on the event loop)."""
@@ -126,11 +143,11 @@ class TapRawStream:
     async def stop(self) -> bool:
         """Return the strap to Text mode and disconnect. True if Text mode was confirmed."""
         if self._sdk is None:
-            return True
+            return self._closed_ok  # Already closed (e.g. by a failed start); report how that went.
         sdk, self._sdk = self._sdk, None
-        ok = await close_tap(sdk)
-        log.info("Disconnected%s.", "" if ok else " (Text mode NOT confirmed)")
-        return ok
+        self._closed_ok = await close_tap(sdk)
+        log.info("Disconnected%s.", "" if self._closed_ok else " (Text mode NOT confirmed)")
+        return self._closed_ok
 
     # -- data path ---------------------------------------------------------
     def _handle_notification(self, _char, data: bytearray) -> None:
@@ -144,10 +161,10 @@ class TapRawStream:
                 cb(sample, host_time)
             except Exception:
                 log.exception("sample callback failed")
-        try:
-            self._queue.put_nowait((sample, host_time))
-        except asyncio.QueueFull:
-            self.dropped += 1  # nobody is consuming samples(); keep newest by dropping
+        if self._queue.full():
+            self._queue.get_nowait()  # Keep the newest: drop the oldest (also when nobody reads samples()).
+            self.dropped += 1
+        self._queue.put_nowait((sample, host_time))
 
     async def samples(self) -> AsyncIterator[Sample]:
         """Async iterator over samples (FingerAccelSample or ImuSample)."""
@@ -166,8 +183,11 @@ class DemoStream(TapRawStream):
         self._task = asyncio.create_task(self._run())
         log.info("Demo stream started (no hardware).")
 
-    async def stop(self) -> None:
-        self._task.cancel()
+    async def stop(self) -> bool:
+        task = getattr(self, "_task", None)
+        if task is not None:
+            task.cancel()
+        return True
 
     async def _run(self) -> None:
         t0 = time.time()

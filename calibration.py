@@ -8,7 +8,7 @@ import numpy as np
 from paper_detector import detect_paper
 
 FLAT_W, FLAT_H = 1100, 850   # US Letter landscape, 100 px per inch.
-FINGERTIPS = {"Thumb": 4, "Index": 8, "Middle": 12, "Ring": 16, "Pinky": 20}
+FINGERTIPS = {"thumb": 4, "index": 8, "middle": 12, "ring": 16, "pinky": 20}  # Strap finger -> MediaPipe tip id
 BORDER_PX = 12               # Ignore ink this close to the paper edge.
 DARK_RATIO = 0.7             # Darker than this fraction of the wider paper is solid ink.
 INK_RATIO = 0.7            # Darker than this fraction of nearby paper is ink.
@@ -22,15 +22,11 @@ EDGE_PX = BORDER_PX + 2      # Ink this close to the paper edge is the desk, not
 
 
 def order_corners(pts):
-    # Order as top-left, top-right, bottom-right, bottom-left.
-    s = pts.sum(axis=1)
-    d = pts[:, 1] - pts[:, 0]
-    return np.float32([
-        pts[np.argmin(s)],
-        pts[np.argmin(d)],
-        pts[np.argmax(s)],
-        pts[np.argmax(d)],
-    ])
+    # Order as top-left, top-right, bottom-right, bottom-left: clockwise around the
+    # centroid (y points down), starting at the smallest x+y. Works at any rotation.
+    c = pts.mean(axis=0)
+    pts = pts[np.argsort(np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0]))]
+    return np.float32(np.roll(pts, -int(np.argmin(pts.sum(axis=1))), axis=0))
 
 
 def find_paper_corners(frame_bgr):
@@ -275,6 +271,22 @@ def region_at(cal, x_norm, y_norm):
     x = min(max(int(x_norm * w), 0), w - 1)
     y = min(max(int(y_norm * h), 0), h - 1)
     return int(cal["key_map"][y, x])
+
+
+def fingertip(hand, tip):
+    """(x, y) of a fingertip landmark, unfolded if MediaPipe folded it back.
+
+    From overhead, MediaPipe sometimes models fingers resting on keys as a fist:
+    the tip lands behind the middle knuckle, back on the knuckle line. A playing
+    finger can't point backwards, so put the tip ahead of the knuckle instead,
+    one finger's end length along the knuckle-to-knuckle direction.
+    """
+    base, mid, end, t = (np.array([hand[k].x, hand[k].y]) for k in range(tip - 3, tip + 1))
+    forward = mid - base
+    if np.dot(t - mid, forward) >= 0:
+        return t[0], t[1]
+    q = mid + forward / np.linalg.norm(forward) * (np.linalg.norm(end - mid) + np.linalg.norm(t - end))
+    return q[0], q[1]
 
 
 def save_calibration(cal, directory):

@@ -63,7 +63,10 @@ Install and configure ngrok using its [official documentation](https://ngrok.com
    ngrok http 5000
    ```
 
-3. Open the HTTPS forwarding URL displayed by ngrok on your phone.
+3. On your phone, open the HTTPS forwarding URL displayed by ngrok plus the
+   `/?token=...` part the server printed at startup (e.g.
+   `https://abc.ngrok-free.app/?token=XYZ`). Without the token the server rejects
+   frames (403). The token changes every start; set `PHONE_TOKEN` to keep one fixed.
 4. Select **Start Camera** and allow camera access.
 5. Press `Q` in the OpenCV window to stop the server.
 
@@ -77,6 +80,7 @@ Keep both the Python server and ngrok running while using the camera.
 |---|---|---|
 | `C` | Calibrate the paper keyboard. Keep your hands out of view for about a second. | Always |
 | `S` | Save the current camera frame to `samples/` (for debugging calibration). | Always |
+| `V` | Start/stop saving every processed frame to `recordings/frames_<time>/`. Each file is named by its wall-clock time (`host_time_s` in the tap logs), so you can pull up the frames around any tap. About 50 MB per minute. | Always |
 | `T` | Tap calibration: rest your hand 3 s, then tap each finger 5 times on the beeps. Saves `calibration/tap_profile.json`. | With `--tap` or `--tap-demo` |
 | `G` | Guided accuracy session: tap the named finger/key on each beep. Saves `recordings/session_<time>_*.csv`. | With `--session` and a strap, after `C` |
 | `Q` | Quit. Puts the strap back into normal typing mode and disconnects; wait for the confirmation line (see Closing the strap safely). `Ctrl+C` once in the terminal also works. | Always |
@@ -132,7 +136,7 @@ reach each other (many school and public networks block this).
 
 3. Find your computer's local IP address (macOS: `ipconfig getifaddr en0`;
    Windows: `ipconfig`, look for the IPv4 address) and open
-   `https://<that-ip>:5000` on your phone.
+   `https://<that-ip>:5000/?token=...` (token as printed by the server) on your phone.
 4. The phone warns that the certificate isn't trusted. Continue anyway
    (Safari: **Show Details → visit this website**; Chrome: **Advanced → Proceed**),
    then select **Start Camera**.
@@ -154,12 +158,12 @@ The certificate expires after 365 days; rerun step 1 to make a new one.
 - `calibration.py` — Finds the paper, flattens it, detects and numbers the keys, and saves/loads `calibration/`.
 - `calibrate_image.py` — Writes a `_debug.png` for one saved frame (see Calibration).
 - `paper_detector.py` — White-paper mask used by calibration and the live overlay.
-- `debug.py` — Old standalone viewer: paper-detection mask from webcam 0. Not used by the app.
 - `tapstrap/` — Tap Strap 2 raw-sensor decoding (`decode.py`) and Bluetooth streaming (`stream.py`).
 - `tap_view.py` — Tap Strap window shown by `phone_server.py --tap` / `--tap-demo`.
-- `tap_strap_live.py`, `hello_tap.py` — Standalone strap scripts from the old demo repo (console readout, tap codes). Not used by the app.
 - `stream_raw.py`, `live_plot.py` — Live Tap Strap readout and plot (`--demo` works without a strap).
+- `recording.py` — Shared strap CSV recorder and cue click (used by the app, `stream_raw.py` and `m0_record.py`).
 - `m0_record.py`, `m0_analyze.py` — Milestone 0 recording sessions and reports (see Tap Strap (M0)).
+- `frames_analyze.py` — Fingertip-to-key check on frames recorded with V (see Checking hand tracking).
 - `models/hand_landmarker.task` — MediaPipe hand-tracking model.
 - `tests/` — Unit tests; `tests/fixtures/` holds real camera frames used as regression tests.
 - `plans/` — Implementation plans and their status.
@@ -213,9 +217,9 @@ python phone_server.py --camera 1 --tap-demo   # synthetic strap data
 
 A **Tap Strap** window opens next to the camera feed. Each finger has a live accelerometer bar (red = tap-sized spike) and, on the right, the key the camera sees that fingertip on. If the strap can't connect, the window says so and the camera keeps running. Q puts the strap back into normal typing mode.
 
-**Closing the strap safely.** Every script closes the strap the same way (`tapstrap.close_tap`): stop the 10 s mode refresh, write Text mode, wait 0.5 s for the firmware to apply it, then disconnect. Skipping the disconnect leaves Windows holding a stale Bluetooth session that the next connect collides with. To quit:
+**Closing the strap safely.** Every script closes the strap the same way (`tapstrap.close_tap`): stop the 10 s mode refresh, write Text mode, wait 0.5 s for the firmware to apply it, then disconnect. Skipping the disconnect leaves Windows holding a stale Bluetooth session that the next connect collides with. Writing your own strap code? See [TAP_CLOSING.md](TAP_CLOSING.md). To quit:
 
-1. Press Q (or Ctrl+C **once**). Don't close the terminal window or press Ctrl+C repeatedly: that kills the process mid-close.
+1. Press Q (or Ctrl+C once). Once `Closing Tap Strap...` appears, further Ctrl+C presses are ignored until the close finishes. Don't close the terminal window: that still kills the process mid-close.
 2. Wait for `Tap Strap back in typing mode and disconnected.`
 3. Only then switch the strap off or start another run. Run one strap program at a time.
 4. If it prints a WARNING instead, switch the strap off and on (or toggle Windows Bluetooth) before reconnecting.
@@ -230,7 +234,9 @@ To try the full pipeline without a strap: calibrate a paper keyboard (C), then r
 
 **Measuring accuracy.** Run with `--session`, calibrate (C), then press G. Follow the on-screen cues and tap on each beep: 40 single taps on named keys, 10 chords, then 20 s of moving your hand without tapping. Then run `python session_analyze.py recordings/session_<time>` for detection, right-key, crosstalk, chord and false-tap rates. Add the headline numbers to METRICS.md.
 
-**Tap calibration (T).** With the strap on, press T. Rest your hand still on the paper for 3 s, then tap each finger 5 times on the beeps. The app saves per-finger tap thresholds and finger crosstalk to `calibration/tap_profile.json` and loads it on every start. Redo it if you re-seat the strap. Run a guided session (G) before and after to see the difference.
+**Checking hand tracking.** To see whether MediaPipe puts your fingertips on the right keys, press V to start recording frames, play, then press V again. Each frame is saved to `recordings/frames_<time>/`, named by its wall-clock time, the same as `host_time_s` in the tap logs. To check a tap, find the frames whose names are closest to its time. Then run `python frames_analyze.py recordings/frames_<time>`. It prints the key under each fingertip for every frame, e.g. `I:0->17` when the app's correction moved a folded-back tip onto key 17, and a total of fingertips on a key. It also writes `recordings/frames_<time>_overlay/` with keys in green, MediaPipe's tips in red and corrected tips in cyan. It uses your saved calibration, so don't move the camera between calibrating and recording.
+
+**Tap calibration (T).** With the strap on, press T. Rest your hand still on the paper for 3 s, then tap each finger 5 times on the beeps. The app saves per-finger tap thresholds (and noise floor) to `calibration/tap_profile.json` and loads it on every start. Redo it if you re-seat the strap. Run a guided session (G) before and after to see the difference.
 
 ## Tests
 
