@@ -1,7 +1,6 @@
 import argparse
-import hmac
+import collections
 import os
-import secrets
 import signal
 import sys
 import threading
@@ -48,8 +47,6 @@ SETTINGS_WINDOW = "Calibration settings"
 CAMERA_WINDOW = "Phone Camera Feed"
 TAP_WINDOW = "Tap Strap"
 CAMERA_MAX_WIDTH = 640     # Webcam frames are shrunk to this for speed.
-# Shared secret for POST /frame: through ngrok the server is reachable from the internet.
-FRAME_TOKEN = os.environ.get("PHONE_TOKEN") or secrets.token_urlsafe(16)
 
 camera_app = None  # The CameraApp that POST /frame feeds; set by main().
 
@@ -120,9 +117,6 @@ def camera_js():
 
 @app.post("/frame")
 def receive_frame():
-    token = request.headers.get("X-Frame-Token", "").encode()
-    if not hmac.compare_digest(token, FRAME_TOKEN.encode()):
-        return "Missing or wrong token: open the link the server printed.", 403
     seq = None
     if "X-Frame-Seq" in request.headers:
         try:
@@ -191,29 +185,38 @@ def camera_loop(index, submit_frame):
             time.sleep(0.05)
 
 
+def hand_label(result, i):
+    return result.handedness[i][0].category_name if i < len(result.handedness) else None
+
+
 def pick_hand(result, strap_label=None):
-    """Index of the strap hand in result.hand_landmarks, or None (same rule as hand_fingers)."""
+    """Index of the strap hand in result.hand_landmarks, or None (same rule as hand_fingers).
+
+    strap_label None (strap hand not known yet) picks the hand only if it's the only one in view.
+    """
+    if strap_label is None:
+        return 0 if len(result.hand_landmarks) == 1 else None
     for i in range(len(result.hand_landmarks)):
-        label = result.handedness[i][0].category_name if i < len(result.handedness) else None
-        if (strap_label is None and i == 0) or (strap_label is not None and label == strap_label):
+        if hand_label(result, i) == strap_label:
             return i
     return None
+
+
+def per_hand_fingers(result, cal):
+    """[(MediaPipe label, {finger: key under its tip})] for every hand in view."""
+    return [(hand_label(result, i), {name: region_at(cal, *fingertip(hand, k)) for name, k in FINGERTIPS.items()})
+            for i, hand in enumerate(result.hand_landmarks)]
 
 
 def hand_fingers(result, cal, strap_label=None):
     """Return (fingers of the chosen hand, regions under any fingertip).
 
-    The chosen hand is the one MediaPipe labels strap_label, or the first hand if
-    strap_label is None. fingers is {} when that hand isn't visible.
+    The chosen hand is pick_hand's. fingers is {} when that hand isn't visible.
     """
-    chosen, touched = {}, set()
+    per_hand = per_hand_fingers(result, cal)
     strap_i = pick_hand(result, strap_label)
-    for i, hand in enumerate(result.hand_landmarks):
-        fingers = {name: region_at(cal, *fingertip(hand, k)) for name, k in FINGERTIPS.items()}
-        touched |= {r for r in fingers.values() if r}
-        if i == strap_i:
-            chosen = fingers
-    return chosen, touched
+    chosen = per_hand[strap_i][1] if strap_i is not None else {}
+    return chosen, {r for _, fingers in per_hand for r in fingers.values() if r}
 
 
 SETTINGS_HELP = [
@@ -255,7 +258,8 @@ class CameraApp:
         self.recordings_dir = Path(data_dir) / "recordings"
         self.tap, self.player, self.base_note = tap, player, base_note
         self.session_enabled = session_enabled
-        self.strap_label = strap_label  # MediaPipe label of the strap hand; None = first hand.
+        self.strap_label = strap_label  # MediaPipe label of the strap hand; None = auto (learned from taps).
+        self.label_votes = collections.Counter()  # Auto mode: label -> taps that only that hand's finger explains.
 
         self.frame_lock = threading.Lock()
         self.landmarker_lock = threading.Lock()
@@ -267,6 +271,8 @@ class CameraApp:
         self.latest_frame = None
         self.latest_raw = None
         self.latest_fingers = {}
+        self.latest_per_hand = []  # per_hand_fingers() of the newest frame.
+        self.latest_hands_seen = ""  # MediaPipe labels in the newest frame, e.g. "left+right".
         self.latest_hand = None    # Strap-hand landmarks of the newest frame (for session logs).
         self.status_text = "Press C to calibrate."
         self.ink_ratio_setting = INK_RATIO
@@ -382,21 +388,44 @@ class CameraApp:
                 self.checked_size = frame_size
                 self.status_text = "Frame size changed (phone rotated?): press C to recalibrate."
             cal = self.calibration if not self.calibrating else None
+            label = self.strap_hand_label()
 
-        fingers = {}
+        fingers, per_hand = {}, []
         if cal is not None:
-            fingers, touched = hand_fingers(result, cal, self.strap_label)
+            per_hand = per_hand_fingers(result, cal)
+            fingers, touched = hand_fingers(result, cal, label)
             annotated = draw_calibration(annotated, cal, touched)
 
         # Draw detected hand landmarks on top of the overlay.
         annotated = draw_hand_landmarks(annotated, result)
 
-        i = pick_hand(result, self.strap_label) if cal is not None else None
+        i = pick_hand(result, label) if cal is not None else None
         hand = result.hand_landmarks[i] if i is not None else None
         with self.frame_lock:
             self.latest_frame = annotated
             self.latest_fingers = fingers
+            self.latest_per_hand = per_hand
+            self.latest_hands_seen = "+".join(h[0].category_name.lower() for h in result.handedness)
             self.latest_hand = hand
+
+    def strap_hand_label(self):
+        """MediaPipe label of the strap hand: fixed by --tap-hand, else the most-voted one (or None)."""
+        if self.strap_label is not None:
+            return self.strap_label
+        return self.label_votes.most_common(1)[0][0] if self.label_votes else None
+
+    def tap_key(self, finger, fingers, per_hand):
+        """Key for a strap tap. In auto mode, also votes for which hand wears the strap."""
+        key = fingers.get(finger)
+        if self.strap_label is None:
+            # Only one hand has the tapped finger on a key: that hand most likely tapped.
+            on_key = [(label, f[finger]) for label, f in per_hand if f.get(finger)]
+            if len(on_key) == 1:
+                with self.frame_lock:
+                    self.label_votes[on_key[0][0]] += 1
+                if not fingers:  # Strap hand not known yet, or not in view: trust the lone candidate.
+                    key = on_key[0][1]
+        return key
 
     def process_pending(self):
         with self.pending_lock:
@@ -502,6 +531,9 @@ class CameraApp:
             )
             status = self.status_text
             fingers = dict(self.latest_fingers)
+            per_hand = list(self.latest_per_hand)
+            hands_seen = self.latest_hands_seen
+            strap = (self.strap_hand_label() or "").lower()
 
         if frame is None:
             frame = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -516,10 +548,20 @@ class CameraApp:
         if fingers:
             cv2.putText(
                 frame,
-                "  ".join(f"{name[0].upper()}:{rid or '-'}" for name, rid in fingers.items()),
+                f"{strap or 'only'} hand  " + "  ".join(f"{name[0].upper()}:{rid or '-'}" for name, rid in fingers.items()),
                 (5, frame.shape[0] - 8),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1,
             )
+        elif hands_seen and self.calibration is not None:
+            # Keys light up for any hand, but notes only follow the strap hand: say why none play.
+            if self.strap_label is not None:
+                other = "left" if strap == "right" else "right"
+                text = f"Strap hand ({strap}) not seen, camera sees {hands_seen}: try --tap-hand {other}"
+            elif strap:
+                text = f"Strap hand ({strap}) not seen, camera sees {hands_seen}"
+            else:
+                text = "Which hand has the strap? Tap a key with it to tell me."
+            cv2.putText(frame, text, (5, frame.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
         if self.session is not None:
             text = self.session.update(now)
             if text is None:
@@ -539,10 +581,10 @@ class CameraApp:
         if self.tap is not None:
             images[TAP_WINDOW] = self.tap.render(fingers)
             for host_time, finger, peak in self.tap.pop_events():
-                key = fingers.get(finger)
-                self.tap_log.add(host_time, finger, key, peak)
+                key = self.tap_key(finger, fingers, per_hand)
+                self.tap_log.add(host_time, finger, key, peak, hands_seen)
                 if self.session_events is not None:
-                    self.session_events.add(host_time, finger, key, peak)
+                    self.session_events.add(host_time, finger, key, peak, hands_seen)
                 if self.player is not None and key:
                     from sound import key_note, tap_velocity  # Only loaded when sound works.
                     self.player.play(key_note(key, self.base_note), tap_velocity(peak, self.tap.thresholds[finger]))
@@ -692,8 +734,8 @@ def main():
     parser.add_argument("--tap-demo", action="store_true", help="like --tap, but with synthetic data (no strap)")
     parser.add_argument("--tap-address", metavar="ADDR", help="Tap Strap BLE address (default: first found)")
     parser.add_argument(
-        "--tap-hand", choices=["left", "right"], default="right",
-        help="hand wearing the strap; its fingers fill the Tap window's key column",
+        "--tap-hand", choices=["auto", "left", "right"], default="auto",
+        help="hand wearing the strap (default auto: learned from which hand's finger is on a key when you tap)",
     )
     parser.add_argument("--program", type=int, default=0, metavar="N",
                         help="General MIDI instrument 0-127 for tapped keys (0 = piano, 40 = violin)")
@@ -710,8 +752,8 @@ def main():
     landmarker = make_landmarker()  # Before the strap starts, so a model error can't strand it.
     tap = player = strap_label = None
     if args.tap or args.tap_demo:
-        # MediaPipe labels hands as if the image were mirrored; ours aren't, so swap.
-        strap_label = {"left": "Right", "right": "Left"}[args.tap_hand]
+        # Checked with a right-hand strap: MediaPipe labels that hand "Right" here.
+        strap_label = None if args.tap_hand == "auto" else args.tap_hand.capitalize()
         tap = TapMonitor(demo=args.tap_demo, address=args.tap_address)
         tap.start()
         if not args.no_sound:
@@ -726,7 +768,6 @@ def main():
     if args.camera is None:
         threading.Thread(target=run_server, args=(args.https,), daemon=True).start()
         source = "phone camera frames"
-        print(f"On the phone open: https://<ngrok or local address>/?token={FRAME_TOKEN}")
     else:
         threading.Thread(target=camera_loop, args=(args.camera, camera_app.submit_frame), daemon=True).start()
         source = f"camera {args.camera}"

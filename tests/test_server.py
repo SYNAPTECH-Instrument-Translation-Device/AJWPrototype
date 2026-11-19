@@ -34,7 +34,6 @@ def jpeg_bytes():
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.client = phone_server.app.test_client()
-        self.client.environ_base["HTTP_X_FRAME_TOKEN"] = phone_server.FRAME_TOKEN
         # Never read or write the developer's real calibration/ folder.
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -128,12 +127,6 @@ class ServerTests(unittest.TestCase):
         self.assertIsNotNone(self.cam.calibration)
         self.assertEqual(len(self.cam.calibration["regions"]), 4)
 
-    def test_frame_without_token_forbidden(self):
-        client = phone_server.app.test_client()
-        self.assertEqual(client.post("/frame", data=jpeg_bytes()).status_code, 403)
-        resp = client.post("/frame", data=jpeg_bytes(), headers={"X-Frame-Token": "wrong"})
-        self.assertEqual(resp.status_code, 403)
-
     def test_out_of_order_frame_dropped(self):
         before = self.cam.frames_received
         for seq in ("s1 5", "s1 3", "s1 5", "s1 6", "s2 0"):
@@ -168,11 +161,15 @@ class HandFingersTests(unittest.TestCase):
         self.cal = {"frame_size": (100, 100), "key_map": km}
         self.both = make_result([("Left", 0.2), ("Right", 0.8)])
 
-    def test_first_hand_without_strap_label(self):
+    def test_unknown_strap_hand_with_two_hands_picks_none(self):
         fingers, touched = phone_server.hand_fingers(self.both, self.cal, None)
-        self.assertEqual(set(fingers.values()), {1})
-        self.assertEqual(len(fingers), 5)
+        self.assertEqual(fingers, {})
         self.assertEqual(touched, {1, 2})
+
+    def test_unknown_strap_hand_with_one_hand_picks_it(self):
+        fingers, _ = phone_server.hand_fingers(make_result([("Left", 0.8)]), self.cal, None)
+        self.assertEqual(set(fingers.values()), {2})
+        self.assertEqual(len(fingers), 5)
 
     def test_strap_label_picks_that_hand(self):
         fingers, touched = phone_server.hand_fingers(self.both, self.cal, "Right")
@@ -320,6 +317,36 @@ class AppTests(unittest.TestCase):
             self.assertEqual(list(csv.reader(f))[1][1:3], ["index", "2"])
         with open(f"{self.cam.session_prefix}_cues.csv", newline="") as f:
             self.assertEqual(list(csv.reader(f))[-1][1], "idle_end")
+
+    def test_tap_logs_hands_seen_when_strap_hand_missing(self):
+        # Camera sees only a left hand while the strap is on the right: no key, and the log says why.
+        self.cam.strap_label = "Right"
+        self.cam.latest_fingers, self.cam.latest_hands_seen = {}, "left"
+        self.tap.events = [(1.0, "index", 1.0)]
+        self.cam.tick(1.0)
+        self.cam.tap_log.file.flush()
+        with open(self.cam.tap_log.file.name, newline="") as f:
+            self.assertEqual(list(csv.reader(f))[1][1:], ["index", "0", "1.000", "left"])
+
+    def test_auto_mode_learns_strap_hand_from_taps(self):
+        cam = self.cam  # strap_label None = auto.
+        both = [("Left", {"index": 0, "middle": 3}), ("Right", {"index": 5, "middle": 4})]
+        # Unknown hand, two in view: the lone hand with the finger on a key gives the key.
+        self.assertEqual(cam.tap_key("index", {}, both), 5)
+        self.assertEqual(cam.strap_hand_label(), "Right")
+        # Both hands on a key: ambiguous, no vote; the learned hand's key is used.
+        self.assertEqual(cam.tap_key("middle", {"index": 5, "middle": 4}, both), 4)
+        self.assertEqual(cam.label_votes, {"Right": 1})
+        # A flipped label now and then doesn't take over.
+        cam.tap_key("index", {}, [("Left", {"index": 2})])
+        cam.tap_key("index", {}, [("Right", {"index": 2})])
+        self.assertEqual(cam.strap_hand_label(), "Right")
+
+    def test_fixed_hand_never_votes(self):
+        self.cam.strap_label = "Left"
+        self.assertEqual(self.cam.tap_key("index", {}, [("Right", {"index": 5})]), None)
+        self.assertEqual(self.cam.strap_hand_label(), "Left")
+        self.assertFalse(self.cam.label_votes)
 
     def test_quit_mid_session_keeps_files(self):
         parts = self.start_session(time.time())

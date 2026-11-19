@@ -64,11 +64,12 @@ class TapLog:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.file = open(path, "w", newline="")
         self.writer = csv.writer(self.file)
-        self.writer.writerow(["host_time_s", "finger", "key", "peak_g"])
+        self.writer.writerow(["host_time_s", "finger", "key", "peak_g", "hands_seen"])
         self.taps = self.on_key = 0
 
-    def add(self, host_time, finger, key, peak):
-        self.writer.writerow([f"{host_time:.4f}", finger, key or 0, f"{peak:.3f}"])
+    def add(self, host_time, finger, key, peak, hands_seen=""):
+        """hands_seen: MediaPipe hand labels in the frame, e.g. "right" or "left+right"."""
+        self.writer.writerow([f"{host_time:.4f}", finger, key or 0, f"{peak:.3f}", hands_seen])
         self.file.flush()  # The app exits by killing the process; don't lose rows.
         self.taps += 1
         self.on_key += bool(key)

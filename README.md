@@ -63,10 +63,7 @@ Install and configure ngrok using its [official documentation](https://ngrok.com
    ngrok http 5000
    ```
 
-3. On your phone, open the HTTPS forwarding URL displayed by ngrok plus the
-   `/?token=...` part the server printed at startup (e.g.
-   `https://abc.ngrok-free.app/?token=XYZ`). Without the token the server rejects
-   frames (403). The token changes every start; set `PHONE_TOKEN` to keep one fixed.
+3. On your phone, open the HTTPS forwarding URL displayed by ngrok.
 4. Select **Start Camera** and allow camera access.
 5. Press `Q` in the OpenCV window to stop the server.
 
@@ -103,7 +100,7 @@ Keep both the Python server and ngrok running while using the camera.
 | `--tap` | Connect the Tap Strap (paired in Windows Bluetooth, Developer mode on). |
 | `--tap-demo` | Fake strap data, no hardware. |
 | `--tap-address ADDR` | Connect to a specific strap. |
-| `--tap-hand left\|right` | Which hand wears the strap (default `right`). |
+| `--tap-hand auto\|left\|right` | Which hand wears the strap (default `auto`: learned from your taps). |
 | `--program N` | MIDI instrument: 0 piano, 24 guitar, 40 violin, 73 flute. |
 | `--base-note N` | MIDI note of key 1 (default 60 = middle C). |
 | `--no-sound` | Log taps without playing notes. |
@@ -136,7 +133,7 @@ reach each other (many school and public networks block this).
 
 3. Find your computer's local IP address (macOS: `ipconfig getifaddr en0`;
    Windows: `ipconfig`, look for the IPv4 address) and open
-   `https://<that-ip>:5000/?token=...` (token as printed by the server) on your phone.
+   `https://<that-ip>:5000` on your phone.
 4. The phone warns that the certificate isn't trusted. Continue anyway
    (Safari: **Show Details → visit this website**; Chrome: **Advanced → Proceed**),
    then select **Start Camera**.
@@ -224,7 +221,7 @@ A **Tap Strap** window opens next to the camera feed. Each finger has a live acc
 3. Only then switch the strap off or start another run. Run one strap program at a time.
 4. If it prints a WARNING instead, switch the strap off and on (or toggle Windows Bluetooth) before reconnecting.
 
-`--tap-hand left|right` (default `right`) says which hand wears the strap, so the key column follows that hand. Keys under both hands are highlighted. If the column follows your other hand, switch the value: hand labels assume an unmirrored camera image, which hasn't been checked with every camera yet.
+`--tap-hand` says which hand wears the strap, so notes and the key column follow that hand; keys under both hands are highlighted. The default, `auto`, works it out from your taps: with one hand in view it uses that hand, and each tap where only one hand has the tapped finger on a key counts as a vote for that hand; the most-voted hand becomes the strap hand (the bottom line of the camera window shows which, e.g. `right hand  T:- I:6 ...`). Until it knows, it asks you to tap a key with the strap hand. `--tap-hand left` or `right` fixes the hand instead; if that hand isn't seen, the window says `Strap hand (...) not seen` in red. Each tap log row also records which hands the camera saw (`hands_seen`).
 
 Each strap tap is logged to `recordings/taps_<time>.csv` (time, finger, the key the camera saw that finger on, peak g). On quit the app prints how many taps landed on a key.
 

@@ -180,12 +180,13 @@ class TapViewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sub" / "taps.csv"
             log = TapLog(path)
-            log.add(1.0, "index", 3, 1.2)
+            log.add(1.0, "index", 3, 1.2, "right")
             log.add(2.0, "ring", None, 0.8)
             log.close()
             with open(path, newline="") as f:
                 rows = list(csv.reader(f))
-        self.assertEqual(rows[0], ["host_time_s", "finger", "key", "peak_g"])
+        self.assertEqual(rows[0], ["host_time_s", "finger", "key", "peak_g", "hands_seen"])
+        self.assertEqual([r[4] for r in rows[1:]], ["right", ""])
         self.assertEqual(len(rows), 3)
         self.assertEqual([r[2] for r in rows[1:]], ["3", "0"])
         self.assertEqual(log.summary(), "Taps: 2, on a key: 1 (50%)")
