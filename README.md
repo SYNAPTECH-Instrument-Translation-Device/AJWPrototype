@@ -163,8 +163,6 @@ The certificate expires after 365 days; rerun step 1 to make a new one.
 - `frames_analyze.py` — Fingertip-to-key check on frames recorded with V (see Checking hand tracking).
 - `models/hand_landmarker.task` — MediaPipe hand-tracking model.
 - `tests/` — Unit tests; `tests/fixtures/` holds real camera frames used as regression tests.
-- `plans/` — Implementation plans and their status.
-- `METRICS.md` — Measured and synthetic results over time.
 - `requirements.txt` — Python dependencies.
 
 ## Using the iPhone over USB (no ngrok)
@@ -229,7 +227,7 @@ Taps on a key play a note through the computer's MIDI synth (on Windows, the bui
 
 To try the full pipeline without a strap: calibrate a paper keyboard (C), then run with `--tap-demo` and hold your hand over the keys. The demo strap taps each finger about once a second.
 
-**Measuring accuracy.** Run with `--session`, calibrate (C), then press G. Follow the on-screen cues and tap on each beep: 40 single taps on named keys, 10 chords, then 20 s of moving your hand without tapping. Then run `python session_analyze.py recordings/session_<time>` for detection, right-key, crosstalk, chord and false-tap rates. Add the headline numbers to METRICS.md.
+**Measuring accuracy.** Run with `--session`, calibrate (C), then press G. Follow the on-screen cues and tap on each beep: 40 single taps on named keys, 10 chords, then 20 s of moving your hand without tapping. Then run `python session_analyze.py recordings/session_<time>` for detection, right-key, crosstalk, chord and false-tap rates.
 
 **Checking hand tracking.** To see whether MediaPipe puts your fingertips on the right keys, press V to start recording frames, play, then press V again. Each frame is saved to `recordings/frames_<time>/`, named by its wall-clock time, the same as `host_time_s` in the tap logs. To check a tap, find the frames whose names are closest to its time. Then run `python frames_analyze.py recordings/frames_<time>`. It prints the key under each fingertip for every frame, e.g. `I:0->17` when the app's correction moved a folded-back tip onto key 17, and a total of fingertips on a key. It also writes `recordings/frames_<time>_overlay/` with keys in green, MediaPipe's tips in red and corrected tips in cyan. It uses your saved calibration, so don't move the camera between calibrating and recording.
 
