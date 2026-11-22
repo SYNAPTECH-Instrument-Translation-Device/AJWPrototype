@@ -16,11 +16,10 @@ import asyncio
 import csv
 import os
 import sys
-import threading
 import time
 from datetime import datetime
 
-from stream_raw import Recorder
+from recording import Recorder, click
 from tapstrap import FINGERS, DemoStream, SensorConfig, TapRawStream
 
 PAUSE = 2.0  # Seconds to read a new instruction.
@@ -46,14 +45,6 @@ def build_schedule(taps, holds, idle, period):
     t += PAUSE
     sched += [(t, "idle_start", ""), (t + idle, "idle_end", "")]
     return sched
-
-
-def click():
-    try:
-        import winsound
-        threading.Thread(target=winsound.Beep, args=(1000, 30), daemon=True).start()
-    except ImportError:
-        print("\a", end="", flush=True)
 
 
 async def run(args, prefix):

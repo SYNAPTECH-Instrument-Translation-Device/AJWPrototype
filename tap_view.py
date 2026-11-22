@@ -8,6 +8,7 @@
 import asyncio
 import collections
 import csv
+import logging
 import threading
 import time
 from pathlib import Path
@@ -22,7 +23,38 @@ TAP_G = 0.5          # Bars turn red above this, so taps stand out.
 HALF_LIFE_S = 0.1    # Peak-hold decay of the bars.
 STALE_S = 1.0        # No finger data for this long means the strap went quiet.
 REFRACTORY_S = 0.15  # One tap per finger per this long (bounces and ringing).
+# A tap event waits up to this many samples (30 ms at 200 Hz) after the threshold
+# crossing, or until the finger drops back under threshold, to report the true peak
+# for loudness. Bounded so a musical note isn't noticeably late.
+PEAK_SAMPLES = 6
 WIDTH, HEIGHT = 480, 300
+
+log = logging.getLogger(__name__)
+
+
+class Listeners(list):
+    """Sample callbacks run on the strap thread. append/remove wait for a dispatch
+    in progress, so once remove() returns that listener is never called again."""
+
+    def __init__(self):
+        super().__init__()
+        self.lock = threading.RLock()  # Reentrant: a listener may remove itself.
+
+    def append(self, listener):
+        with self.lock:
+            super().append(listener)
+
+    def remove(self, listener):
+        with self.lock:
+            super().remove(listener)
+
+    def __call__(self, sample, host_time):
+        with self.lock:
+            for listener in list(self):
+                try:
+                    listener(sample, host_time)
+                except Exception:
+                    log.exception("tap listener failed")  # Don't starve the others.
 
 
 class TapLog:
@@ -32,11 +64,12 @@ class TapLog:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.file = open(path, "w", newline="")
         self.writer = csv.writer(self.file)
-        self.writer.writerow(["host_time_s", "finger", "key", "peak_g"])
+        self.writer.writerow(["host_time_s", "finger", "key", "peak_g", "hands_seen"])
         self.taps = self.on_key = 0
 
-    def add(self, host_time, finger, key, peak):
-        self.writer.writerow([f"{host_time:.4f}", finger, key or 0, f"{peak:.3f}"])
+    def add(self, host_time, finger, key, peak, hands_seen=""):
+        """hands_seen: MediaPipe hand labels in the frame, e.g. "right" or "left+right"."""
+        self.writer.writerow([f"{host_time:.4f}", finger, key or 0, f"{peak:.3f}", hands_seen])
         self.file.flush()  # The app exits by killing the process; don't lose rows.
         self.taps += 1
         self.on_key += bool(key)
@@ -55,6 +88,7 @@ class TapMonitor:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = None
+        self.closed_cleanly = False
         self.status = "Tap: connecting..."
         self.activity = {f: 0.0 for f in FINGERS}
         self.gyro = (0.0, 0.0, 0.0)
@@ -63,23 +97,37 @@ class TapMonitor:
         self.last_rate_time = self.last_render = time.monotonic()
         self.above = {f: False for f in FINGERS}   # Was the last sample over TAP_G?
         self.last_tap = {f: -1e9 for f in FINGERS}
+        self.thresholds = {f: TAP_G for f in FINGERS}  # Replaced by a fitted tap profile.
         self.events = collections.deque(maxlen=64)  # (host_time_s, finger, peak_g)
+        self.pending = {}  # finger -> [crossing host_time, peak so far, samples left]
+        self.connected = False  # Did the strap (or demo) ever start streaming?
+        self.listeners = Listeners()  # Extra (sample, host_time) callbacks, e.g. a session recorder.
 
     def start(self):
         self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
         self.thread.start()
 
-    def stop(self, timeout=5.0):
+    def stop(self, timeout=10.0):
+        """Close the strap; True once it's back in Text mode and disconnected.
+
+        False also after a failed connect whose cleanup couldn't confirm Text mode;
+        check self.connected to tell "never connected" apart.
+
+        Callers that kill the process afterwards must wait for this: killing
+        mid-close leaves the strap in raw mode and Windows holding the link.
+        """
         self.stop_event.set()
-        if self.thread is not None:
-            # Restoring typing mode is a Bluetooth write; the caller kills the process right after.
-            self.thread.join(timeout)
+        if self.thread is None:
+            return True
+        self.thread.join(timeout)
+        return not self.thread.is_alive() and self.closed_cleanly
 
     async def _run(self):
         stream = (DemoStream if self.demo else TapRawStream)(SensorConfig(), address=self.address)
         stream.on_sample(self.on_sample)
         try:
             await stream.start()
+            self.connected = True
             with self.lock:
                 self.status = "Tap: demo data" if self.demo else "Tap: connected"
             while not self.stop_event.is_set():
@@ -89,10 +137,11 @@ class TapMonitor:
                 self.status = f"Tap: not connected - {error}"[:70]
         finally:
             try:
-                # Also after a half-finished connect, so the link isn't left open.
-                await stream.stop()
+                # Also after a half-finished connect, so the link isn't left open;
+                # stop() then reports how that earlier cleanup went.
+                self.closed_cleanly = await stream.stop()
             except Exception:
-                pass  # DemoStream.stop fails if start never ran; nothing to clean up.
+                log.exception("Tap Strap close failed")
 
     def on_sample(self, sample, host_time=None):
         host_time = host_time if host_time is not None else time.time()
@@ -103,13 +152,25 @@ class TapMonitor:
                 for f, m in zip(FINGERS, sample.magnitudes()):
                     dev = abs(m - 1.0)
                     self.activity[f] = max(self.activity[f], dev)
-                    if dev > TAP_G and not self.above[f] and host_time - self.last_tap[f] >= REFRACTORY_S:
-                        # shortcut: peak is the deviation at the crossing sample, not the true peak; fine for v1 loudness.
-                        self.events.append((host_time, f, dev))
+                    thr = self.thresholds[f]
+                    tap = self.pending.get(f)
+                    if tap is not None:
+                        tap[1], tap[2] = max(tap[1], dev), tap[2] - 1
+                        if dev <= thr or tap[2] <= 0:  # Peak is past, or the wait is up.
+                            self.events.append((tap[0], f, tap[1]))
+                            del self.pending[f]
+                    elif dev > thr and not self.above[f] and host_time - self.last_tap[f] >= REFRACTORY_S:
+                        # shortcut: a tap still pending when the stream stops is never reported; add a flush if that matters.
+                        self.pending[f] = [host_time, dev, PEAK_SAMPLES]
                         self.last_tap[f] = host_time
-                    self.above[f] = dev > TAP_G
+                    self.above[f] = dev > thr
             else:
                 self.gyro = sample.gyro_dps
+        self.listeners(sample, host_time)
+
+    def set_profile(self, profile):
+        with self.lock:
+            self.thresholds = {f: float(profile["thresholds"][f]) for f in FINGERS}
 
     def pop_events(self):
         """Taps since the last call, oldest first: [(host_time_s, finger, peak_g)]."""
@@ -124,9 +185,8 @@ class TapMonitor:
             return "Tap: no data - strap asleep or out of range?"
         return self.status
 
-    def render(self,finger_regions=None):
-        # Camera names are capitalised (calibration.FINGERTIPS); strap names are not.
-        finger_regions = {k.lower(): v for k, v in (finger_regions or {}).items()}
+    def render(self, finger_regions=None):
+        finger_regions = finger_regions or {}
         img = np.full((HEIGHT, WIDTH, 3), 30, np.uint8)
         font, white = cv2.FONT_HERSHEY_SIMPLEX, (230, 230, 230)
         now = time.monotonic()
@@ -135,6 +195,7 @@ class TapMonitor:
                 self.rate = self.count / (now - self.last_rate_time)
                 self.count, self.last_rate_time = 0, now
             activity = dict(self.activity)
+            thresholds = dict(self.thresholds)
             decay = 0.5 ** ((now - self.last_render) / HALF_LIFE_S)
             self.last_render = now
             for f in FINGERS:
@@ -151,7 +212,7 @@ class TapMonitor:
             cv2.putText(img, f, (10, y + 15), font, 0.5, white, 1)
             cv2.rectangle(img, (bar_x, y), (bar_x + bar_w, y + 20), (70, 70, 70), 1)
             fill = int(bar_w * min(1.0, a / FULL_SCALE_G))
-            color = (0, 0, 255) if a > TAP_G else (0, 200, 0)
+            color = (0, 0, 255) if a > thresholds[f] else (0, 200, 0)
             if fill:
                 cv2.rectangle(img, (bar_x, y), (bar_x + fill, y + 20), color, -1)
             region = finger_regions.get(f)

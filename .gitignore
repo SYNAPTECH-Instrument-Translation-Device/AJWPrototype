@@ -8,3 +8,12 @@ calibration/
 recordings/
 # Local HTTPS certificate (private key must never be committed)
 *.pem
+logs/
+# Personal Claude notes, lessons and plans (kept locally, not shared)
+MISSION.md
+NOTES.md
+RESOURCES.md
+METRICS.md
+lessons/
+plans/
+reference/
